@@ -2,9 +2,10 @@
 
 ## Backlog: alternatives worth trying later
 
-- **A permission rule that lets the pane's `javascript_tool` run unasked** (2026-10-26), only if auto mode's
-  classifier keeps giving no verdict on the autorun mod's call. It would let every pane script run without a check,
-  far wider than the mod needs, so it is the user's rule to write, not the mod's. Revisit hook: `permissions.allow`
+- **A permission rule that lets the pane's `javascript_tool` run unasked** (2026-10-26), the one way the autorun
+  mod runs in auto mode, whose classifier refuses a call no request asked for (measured live). It would let every pane
+  script run without auto mode's check (the guard still judges each one), far wider than the mod needs, so it is the
+  user's rule to write, not the mod's. Revisit hook: `permissions.allow`
   in `~/.claude/settings.json`; the mod needs no change.
 - **uBlock Origin Lite in the user's own Chrome for Claude in Chrome sessions** (2026-10-26). Claude in Chrome opens
   ordinary tabs in the user's profile, so an MV3 blocker there filters them at the network layer, which no page script
@@ -107,9 +108,11 @@ mod (`hooks/autorun.ts`) now does it. Four forks, each measured in `claude plugi
   refused on two live navigations ("The server-side auto mode classifier gave no verdict"). A `tool.check` hook
   approving only the mod's own call with its own script: rejected, blocked by the auto-mode classifier as an
   auto-mode bypass, rightly: widening what runs unasked is the user's call. `$.tool.call`, a tool call of the mod's
-  own: chosen. The guard's PreToolUse, the user's rules and the classifier judge it like the model's call. Live
-  result pending (it loads in a session only after a turn ends). A user rule allowing the pane's script tool: in the
-  backlog.
+  own: chosen. The guard's PreToolUse, the user's rules and the classifier judge it like the model's call. Live, in
+  auto mode, it was refused as well: the classifier "gave no verdict ... the request that produced this action did
+  not ask for one". Auto mode approves only what some request asked for, and a call the mod raises on its own has
+  none, so in auto mode the mod falls back to the guard's reminder and says why (measured: the model's own
+  `browserShield()` then skipped a 6 s ad). A user rule allowing the pane's script tool: in the backlog.
 - **Where the host is decided.** A regex test inside the page: rejected after the review (4 lenses, 2 refuters each).
   A page can replace `RegExp.prototype.test`, plant a fake `window.__browserShield`, and have its words relayed as a
   `browser-shield:` note. Chosen: the mod decides from the browser's own report lines, the page gate uses only

@@ -104,12 +104,13 @@ sees its output.
 
 A mod's `$.mcp.call` is documented as needing no prompt, but in auto mode the call went to the auto-mode classifier
 anyway, which answered "gave no verdict" and refused it; the edit that would have added a `tool.check` hook letting
-the mod approve its own call was refused by auto mode as an auto-mode bypass.
+the mod approve its own call was refused by auto mode as an auto-mode bypass. Sent as an ordinary tool call
+(`$.tool.call`), the classifier refused it again, saying the request that produced it "did not ask for one".
 
 **Why it came up:** two live YouTube navigations in the Browser pane, 2026-10-26, Claude Code 2.1.308 desktop.
 
-**Takeaway:** an extension acts with the user's permissions, not its own: route its actions through the normal
-tool path, and leave any widening of what runs unasked to a rule the user writes.
+**Takeaway:** an extension acts with the user's permissions, not its own, and auto mode approves only what a
+request asked for: an action no one asked for needs a rule the user writes.
 
 ### One TypeScript file can feed a plugin engine and `node --test`
 

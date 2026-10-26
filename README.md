@@ -61,8 +61,9 @@ Personal additions go in git-ignored `lists/*.local.txt`: `block.local.txt`, `al
 The repo root is also a Claude Code plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`). Load it for one
 session with `claude --plugin-dir ~/projects/automation/browser-shield`, or for every session the desktop app starts by
 naming the folder in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. It needs the guard
-hooks above (it replaces their reminder). In auto mode its call goes to the classifier like Claude's own; whether
-the classifier answers a plugin's call is in `docs/DECISIONS.md`.
+hooks above (it replaces their reminder). In auto mode it cannot run: the classifier refuses a call no request asked
+for (measured), so the mod keeps the guard's reminder and says why. It runs where your permission rules allow the
+pane's `javascript_tool` (`docs/DECISIONS.md`).
 
 ## Use
 
