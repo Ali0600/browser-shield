@@ -31,12 +31,35 @@ TOKEN_PATTERNS = [
     ("npm token", r"\bnpm_[A-Za-z0-9]{36}\b"),
     ("Hugging Face token", r"\bhf_[A-Za-z0-9]{34,}\b"),
     ("private key", r"-----BEGIN [A-Z0-9 _\-]{0,100}PRIVATE KEY"),
-    ("JSON web token", r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),
 ]
 _TOKENS = [(name, re.compile(p)) for name, p in TOKEN_PATTERNS]
 # Kinds that also appear legitimately in URLs and page scripts: YouTube pages carry a public InnerTube key
 # (AIza...), and sign-in and magic links carry JWTs. Typed into a page they are still refused.
 SOFT_IN_URLS = {"Google API key", "JSON web token"}
+
+# A JWT is checked token by token (split on anything that cannot be part of one): the one-regex form backtracks
+# quadratically on a long run of base64 characters, and a slow hook times out, which lets the call through.
+_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9_.\-]+")
+_JWT_PART = re.compile(r"[A-Za-z0-9_\-]{8,}")
+
+
+def _jwts(text: str) -> list:
+    """header.payload.signature runs: the header starts at an "eyJ", the payload starts with one, each part 8+ chars.
+    One pass over each token's dot-separated parts, so the cost is linear in the text."""
+    out = []
+    for token in _TOKEN_SPLIT.split(text):
+        if "eyJ" not in token:
+            continue
+        parts = token.split(".")
+        for i in range(len(parts) - 2):
+            head, payload, sig = parts[i], parts[i + 1], parts[i + 2]
+            at = head.find("eyJ")
+            if at != -1 and len(head) - at >= 8 and payload.startswith("eyJ") and len(payload) >= 8 and len(sig) >= 8 \
+                    and "-" not in head[at:at + 3]:
+                out.append(".".join((head[at:], payload, sig)))
+                break
+    return out
+
 
 _CARD_CANDIDATE = re.compile(r"(?<![\d])(?:\d[ \-]?){12,18}\d(?![\d])")
 _SSN = re.compile(r"(?<![\d\-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(?![\d\-])")
@@ -122,6 +145,9 @@ def find_leaks(text, allow_test_cards: bool = True, environ: Optional[Mapping[st
         m = rx.search(text)
         if m:
             found.append(Leak(name, _mask(m.group(0))))
+    jwts = _jwts(text) if "eyJ" in text else []
+    if jwts:
+        found.append(Leak("JSON web token", _mask(jwts[0])))
     for m in _CARD_CANDIDATE.finditer(text):
         digits = re.sub(r"\D", "", m.group(0))
         if not 13 <= len(digits) <= 19 or not luhn_ok(digits):
@@ -137,3 +163,26 @@ def find_leaks(text, allow_test_cards: bool = True, environ: Optional[Mapping[st
         if value in text:
             found.append(Leak(f"value of ${name}", "…"))
     return found
+
+
+def redact(text: str, environ: Optional[Mapping[str, str]] = None) -> str:
+    """text with every secret, card number and secret-named environment value replaced by a mask: for reason strings
+    and log lines, which quote URLs and paths the agent wrote."""
+    if not isinstance(text, str) or not text:
+        return text
+    for _, rx in _TOKENS:
+        text = rx.sub(lambda m: _mask(m.group(0)), text)
+    for jwt in _jwts(text) if "eyJ" in text else []:
+        text = text.replace(jwt, _mask(jwt))
+    text = _CARD_CANDIDATE.sub(lambda m: _mask_card(m.group(0)), text)
+    text = _SSN.sub("…-…-…", text)
+    for name, value in env_secrets(environ).items():
+        text = text.replace(value, f"${name}")
+    return text
+
+
+def _mask_card(run: str) -> str:
+    digits = re.sub(r"\D", "", run)
+    if 13 <= len(digits) <= 19 and luhn_ok(digits) and card_brand(digits) and digits not in TEST_CARDS:
+        return "…" + digits[-4:]
+    return run

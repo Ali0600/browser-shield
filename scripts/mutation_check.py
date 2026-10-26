@@ -11,6 +11,7 @@ name contains `expect` went red. Exit 1 if any mutant survived or was invalid.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -23,10 +24,18 @@ PYTHON = "/usr/bin/python3"
 TIMEOUT = 180
 
 
-def run_suites(repo: Path) -> tuple[int, int, set[str]]:
+# The every-code-point sweep and the UTS 46 table check take ~20 s a run; a mutant outside the URL parser cannot
+# change their verdict, so they are skipped for it (tests/test_urls.py honours this variable; the gate never sets it).
+SWEEP_FILES = {"browser_shield/urls.py", "browser_shield/uts46.txt", "scripts/gen_uts46.js"}
+
+
+def run_suites(repo: Path, sweep: bool = True) -> tuple[int, int, set[str]]:
     """(tests run, tests failed, names of failed tests) for both suites in repo."""
+    env = dict(os.environ)
+    if not sweep:
+        env["BROWSER_SHIELD_SKIP_SWEEP"] = "1"
     py = subprocess.run([PYTHON, "-I", "-m", "unittest", "discover", "-s", "tests", "-t", ".", "-v"], cwd=repo,
-                        capture_output=True, text=True, timeout=TIMEOUT)
+                        capture_output=True, text=True, timeout=TIMEOUT, env=env)
     js = subprocess.run(["node", "--test", "tests/shield.test.js"], cwd=repo, capture_output=True, text=True,
                         timeout=TIMEOUT)
     failed: set[str] = set()
@@ -81,7 +90,7 @@ def main(argv: list[str]) -> int:
                     print(f"INVALID  {m['id']}: the edit changed nothing")
                     bad += 1
                     continue
-                ran, failed, names = run_suites(repo)
+                ran, failed, names = run_suites(repo, sweep=m["file"] in SWEEP_FILES)
             finally:
                 target.write_bytes(original)
             assert target.read_bytes() == original, f"restore of {m['file']} failed"

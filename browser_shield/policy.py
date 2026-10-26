@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote
@@ -57,9 +58,19 @@ _JS_SINK = re.compile(
 )
 # Shell commands a "paste this into Terminal" lure (ClickFix) ends in. Each one asks the user; none is refused.
 SHELL_LURES = [
-    (re.compile(r"\b(curl|wget)\b[^|;&\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b"), "pipes a download straight into a shell"),
+    # The shell name must end the command (or take options): "curl|bash" quoted inside an echo or a test string is
+    # text, not a pipeline.
+    (re.compile(r"\b(curl|wget)\b[^|;&\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b(?=\s*(?:$|[;&|)<>\n]|-))"),
+     "pipes a download straight into a shell"),
     (re.compile(r"\b(ba|z)?sh\s+-c\s+[\"']?\$\(\s*(curl|wget)\b"), "runs a downloaded script"),
-    (re.compile(r"\bbase64\s+(-d|-D|--decode)\b[^\n]*\|\s*(ba|z)?sh\b"), "decodes and runs a hidden script"),
+    (re.compile(r"\b(ba|z)?sh\s+-c\s+[\"'][^\"'\n]*\b(curl|wget)\b[^\"'\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b"),
+     "runs a downloaded script"),
+    (re.compile(r"\bbase64\s+(-d|-D|--decode)\b[^\n]*\|\s*(ba|z)?sh\b(?=\s*(?:$|[;&|)<>\n]|-))"),
+     "decodes and runs a hidden script"),
+    (re.compile(r"\b(curl|wget)\b[^\n]*(&&|;|\|\|)\s*(sudo\s+)?((ba|z|da|k)?sh\s+[^-\s]|chmod\s+\+?[0-7]*x)"),
+     "downloads a script and then runs it"),
+    (re.compile(r"\b((ba|z|da|k)?sh|source|\.)\s+<\(\s*(curl|wget)\b|\beval\s+[\"']?\$\(\s*(curl|wget)\b"),
+     "runs a downloaded script"),
     (re.compile(r"\bxattr\s+(-[a-z]*d[a-z]*\s+com\.apple\.quarantine|-[a-z]*c[a-z]*\b)"), "removes macOS's download quarantine"),
     (re.compile(r"\bspctl\s+--master-disable\b"), "turns Gatekeeper off"),
     (re.compile(r"\binstaller\s+-pkg\b"), "installs a package"),
@@ -97,6 +108,34 @@ class Verdict:
             self.raise_to(other.decision, "; ".join(other.reasons))
 
 
+class Context:
+    """What the call's surroundings change: WebFetch only reads (no session, nothing saved, no app launched), and the
+    session's own folders (project and scratchpad) hold files Claude may open in the browser without asking."""
+
+    __slots__ = ("fetch_only", "roots")
+
+    def __init__(self, fetch_only: bool = False, roots: tuple = ()):
+        self.fetch_only = fetch_only
+        self.roots = tuple(os.path.realpath(r) for r in roots if isinstance(r, str) and r)
+
+    def with_fetch(self, fetch_only: bool) -> "Context":
+        c = Context(fetch_only)
+        c.roots = self.roots
+        return c
+
+    def inside_roots(self, path: str) -> bool:
+        real = os.path.realpath(path)
+        return any(real == r or real.startswith(r.rstrip("/") + "/") for r in self.roots)
+
+
+NO_CONTEXT = Context()
+# GitHub and GitLab pages that show a file (repository views, not the file itself).
+SOURCE_VIEWS = [
+    (re.compile(r"^(www\.)?github\.com$"), re.compile(r"^/[^/]+/[^/]+(/(blob|tree|blame|commits?|pull|issues)/.*)?/?$")),
+    (re.compile(r"^(www\.)?gitlab\.com$"), re.compile(r"/-/(blob|tree|blame)/")),
+]
+
+
 def short_name(tool_name: str) -> tuple[str, str]:
     """(browser, tool): ("pane", "navigate"), ("chrome", ...), ("web", "WebFetch"), ("shell", <name>), ("", name)."""
     m = re.match(r"^mcp__(?:remote-devices__)?Claude_Browser__(.+)$", tool_name)
@@ -118,7 +157,7 @@ def _leak_verdict(found: list[leaks.Leak], where: str, soft: bool, v: Verdict, w
         v.raise_to(decision, f"{where}: {what} a {leak.kind} ({leak.excerpt})")
 
 
-def check_url(raw: Any, lists: Lists, where: str, depth: int = 0) -> Verdict:
+def check_url(raw: Any, lists: Lists, where: str, depth: int = 0, ctx: Context = NO_CONTEXT) -> Verdict:
     """Verdict on navigating to raw; where names the call for the reason text ("navigate", "batch item 2")."""
     v = Verdict()
     if not isinstance(raw, str) or not raw.strip():
@@ -128,7 +167,10 @@ def check_url(raw: Any, lists: Lists, where: str, depth: int = 0) -> Verdict:
         return v
     clean = urls.preprocess(raw)
     if urls.is_local_path(clean):
-        v.raise_to(ASK, f"{where}: {clean[:80]} is a file on this Mac; opening it in the browser is the user's call")
+        if clean.startswith("\\"):
+            v.raise_to(DENY, f"{where}: {clean[:60]} is a remote file share; the agent does not open those")
+        else:
+            _check_local_file(clean, where, v, ctx)
         return v
     found = leaks.find_leaks(clean)
     for extra in leaks.find_leaks(unquote(clean)):  # a %-encoded secret is still a secret
@@ -142,16 +184,38 @@ def check_url(raw: Any, lists: Lists, where: str, depth: int = 0) -> Verdict:
             v.raise_to(DENY, f"{where}: a browser could read this URL differently from the guard ({exc}); "
                              "write it out plainly as https://host/path")
             continue
-        _check_target(t, lists, where, v, depth)
+        _check_target(t, lists, where, v, depth, ctx)
     return v
 
 
-def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict, depth: int) -> None:
+def _check_local_file(path: str, where: str, v: Verdict, ctx: Context) -> None:
+    """A file on this Mac: fine inside the session's own folders, the user's call anywhere else."""
+    if path.lower().startswith("file:"):
+        path = unquote(re.sub(r"^file:(//(localhost)?)?", "", path, flags=re.I))
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    if path.startswith("~"):
+        path = os.path.expanduser(path)
+    elif not path.startswith("/") and ctx.roots:
+        path = os.path.join(ctx.roots[0], path)
+    if path.startswith("/") and ctx.inside_roots(path):
+        return
+    v.raise_to(ASK, f"{where}: {path[:80]} is a file on this Mac outside this session's folders; opening it in the "
+                    "browser is the user's call")
+
+
+def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict, depth: int, ctx: Context = NO_CONTEXT) -> None:
     if t.scheme == "file":
         if t.file_host:
             v.raise_to(DENY, f"{where}: file://{t.file_host}/ is a remote file share; the agent does not open those")
         else:
-            v.raise_to(ASK, f"{where}: {t.url[:80]} is a file on this Mac; opening it in the browser is the user's call")
+            _check_local_file(t.url, where, v, ctx)
+        return
+    if t.scheme in ("chrome-extension", "chrome"):
+        m = re.match(r"^chrome-extension://([a-p]{32})(?:[/?#]|$)", t.url, re.I)
+        if m and m.group(1).lower() in lists.extensions:
+            return  # the user's own extension, listed in lists/extensions.local.txt
+        v.raise_to(ASK, f"{where}: {t.url[:60]} is a browser or extension page (it can change settings or approve "
+                        "what an extension does); add your own extensions' ids to lists/extensions.local.txt")
         return
     if t.scheme not in SCHEMES_OK:
         if t.url.lower() == "about:blank":
@@ -170,20 +234,21 @@ def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict, depth: i
         domain, source = hit
         v.raise_to(DENY, f"{where}: {t.host} is on the {source} blocklist (as {domain})")
         return
-    asked = lists.asked_by(t.host)
-    if asked:
-        v.raise_to(ASK, f"{where}: {t.host} is a payment or account page ({asked[1]}); the user decides")
-    for host_rx, path_rx in ASK_PATHS:
-        if host_rx.search(t.host) and path_rx.search(t.path):
-            v.raise_to(ASK, f"{where}: {t.host}{t.path[:40]} grants access, changes security or spends money")
-    last = t.path.rsplit("/", 1)[-1].lower()
-    ext = last.rsplit(".", 1)[-1] if "." in last else ""
-    if ext in DOWNLOAD_EXT:
-        v.raise_to(ASK, f"{where}: {last} is a download ({ext}); downloads need the user's go-ahead")
+    if not ctx.fetch_only:  # WebFetch has no session to pay from and saves nothing
+        asked = lists.asked_by(t.host)
+        if asked:
+            v.raise_to(ASK, f"{where}: {t.host} is a payment or account page ({asked[1]}); the user decides")
+        for host_rx, path_rx in ASK_PATHS:
+            if host_rx.search(t.host) and path_rx.search(t.path):
+                v.raise_to(ASK, f"{where}: {t.host}{t.path[:40]} grants access, changes security or spends money")
+        last = t.path.rsplit("/", 1)[-1].lower()
+        ext = last.rsplit(".", 1)[-1] if "." in last else ""
+        if ext in DOWNLOAD_EXT and not any(h.search(t.host) and pth.search(t.path) for h, pth in SOURCE_VIEWS):
+            v.raise_to(ASK, f"{where}: {last} is a download ({ext}); downloads need the user's go-ahead")
     _check_network(t.host, where, v)
     if depth < 2:
         for target in redirect_targets(t):
-            v.absorb(check_url(target, lists, f"{where} (link wrapper to {target[:60]})", depth + 1))
+            v.absorb(check_url(target, lists, f"{where} (link wrapper to {target[:60]})", depth + 1, ctx))
 
 
 def _check_network(host: str, where: str, v: Verdict) -> None:
@@ -216,7 +281,9 @@ def redirect_targets(t: urls.Target) -> list[str]:
 
 
 def check_text(text: Any, where: str, v: Verdict) -> None:
-    """Deny text that would hand a secret or card number to a web page."""
+    """Deny text that would hand a secret or card number to a web page (a number value is text to a form too)."""
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        text = str(text)
     if isinstance(text, str):
         _leak_verdict(leaks.find_leaks(text), where, False, v, "would send the page")
 
@@ -261,7 +328,7 @@ def expand_shield(text: Any) -> Optional[str]:
     return None
 
 
-def evaluate(tool_name: str, tool_input: Any, lists: Optional[Lists] = None) -> Verdict:
+def evaluate(tool_name: str, tool_input: Any, lists: Optional[Lists] = None, ctx: Context = NO_CONTEXT) -> Verdict:
     browser, tool = short_name(tool_name)
     v = Verdict()
     if not browser or not isinstance(tool_input, dict):
@@ -271,35 +338,60 @@ def evaluate(tool_name: str, tool_input: Any, lists: Optional[Lists] = None) -> 
         return v
     lists = lists if lists is not None else Lists()
     if tool == "browser_batch":
-        _check_batch(tool_input, lists, v)
+        _check_batch(tool_input, lists, v, ctx)
     elif tool == "preview_start" and "url" not in tool_input:
-        pass  # a dev server from .claude/launch.json, by name
+        # A server from .claude/launch.json by name; a configuration may carry a url of its own, judged here.
+        for url in launch_urls(tool_input.get("name"), ctx):
+            v.absorb(check_url(url, lists, f"preview_start ({tool_input.get('name')} in .claude/launch.json)", 0, ctx))
     else:
-        _check_action(tool, tool_input, lists, tool, v)
+        _check_action(tool, tool_input, lists, tool, v, ctx)
     return v
 
 
-def _check_action(tool: str, inp: dict, lists: Lists, where: str, v: Verdict) -> None:
+def _check_action(tool: str, inp: dict, lists: Lists, where: str, v: Verdict, ctx: Context = NO_CONTEXT) -> None:
     if tool in ("navigate", "preview_start", "WebFetch"):
-        v.absorb(check_url(inp.get("url"), lists, where))
+        v.absorb(check_url(inp.get("url"), lists, where, 0, ctx.with_fetch(tool == "WebFetch")))
     elif tool == "javascript_tool":
         check_script(inp.get("text"), lists, where, v)
-    elif tool == "computer" and inp.get("action") == "type":
-        check_text(inp.get("text"), where, v)
+    elif tool == "computer" and inp.get("action") in ("type", "key"):
+        text = inp.get("text")
+        check_text(text, where, v)
+        if inp.get("action") == "key" and isinstance(text, str):
+            check_text(text.replace(" ", ""), where, v)  # a secret pressed one key at a time
     elif tool == "form_input":
         check_text(inp.get("value"), where, v)
     elif tool in ("file_upload", "upload_image"):
         v.raise_to(ASK, f"{where}: uploads a file from this Mac to a web page; the user decides")
+    elif tool == "gif_creator" and (inp.get("download") or inp.get("coordinate")):
+        v.raise_to(ASK, f"{where}: exports a screen recording (an upload to the page or a download); the user decides")
 
 
-def _check_batch(inp: dict, lists: Lists, v: Verdict) -> None:
+def launch_urls(name: Any, ctx: Context) -> list:
+    """The url of the named configuration in the session's .claude/launch.json, if it has one."""
+    out = []
+    for root in ctx.roots[:1]:
+        path = os.path.join(root, ".claude", "launch.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                configs = json.load(fh).get("configurations", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        for c in configs if isinstance(configs, list) else []:
+            if isinstance(c, dict) and c.get("name") == name and isinstance(c.get("url"), str):
+                out.append(c["url"])
+    return out
+
+
+def _check_batch(inp: dict, lists: Lists, v: Verdict, ctx: Context = NO_CONTEXT) -> None:
     actions = inp.get("actions")
     if not isinstance(actions, list):
         return
     for i, item in enumerate(actions):
         if not isinstance(item, dict) or not isinstance(item.get("input"), dict):
             continue
-        _check_action(str(item.get("name", "")), item["input"], lists, f"batch item {i + 1} ({item.get('name')})", v)
+        name = str(item.get("name", ""))
+        name = short_name(name)[1] if name.startswith("mcp__") else name  # an item named with the full tool name
+        _check_action(name, item["input"], lists, f"batch item {i + 1} ({item.get('name')})", v, ctx)
 
 
 def rewrite(tool_name: str, tool_input: Any) -> Optional[dict]:
@@ -377,7 +469,7 @@ def landed_on_blocked(tool_name: str, tool_response: Any, lists: Lists) -> Optio
     if browser not in ("pane", "chrome") or tool not in ("navigate", "browser_batch", "preview_start"):
         return None
     text = _response_text(tool_response)
-    for raw in re.findall(r"navigated to (\S+)", text):
+    for raw in re.findall(r"(?m)^(?:\[navigate\] )?navigated to (\S+)", text):
         try:
             t = urls.parse(raw)
         except urls.UnreadableURL:
@@ -392,7 +484,7 @@ def injection_phrase(tool_name: str, tool_response: Any) -> Optional[str]:
     """A phrase in page text addressed to an AI agent ("ignore previous instructions"), or None."""
     browser, tool = short_name(tool_name)
     if browser not in ("pane", "chrome", "web") or tool not in (
-        "get_page_text", "read_page", "find", "javascript_tool", "WebFetch"
+        "get_page_text", "read_page", "find", "javascript_tool", "WebFetch", "browser_batch"
     ):
         return None
     m = INJECTION_PHRASES.search(_response_text(tool_response))

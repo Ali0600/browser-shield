@@ -74,6 +74,25 @@ class CuratedLists(unittest.TestCase):
         self.assertGreater(len(from_file), 10)
         self.assertEqual(from_js, from_file)
 
+    def test_page_script_carries_the_same_ad_paths_and_link_wrappers(self):
+        js = policy.SHIELD_JS.read_text()
+
+        def js_rules(name):
+            block = re.search(r"const %s = \[\n(.*?)\n  \];" % name, js, re.S)
+            self.assertIsNotNone(block, f"{name} not found in page/shield.js")
+            rows = []
+            for line in block.group(1).splitlines():
+                m = re.match(r"\s*\[/(.+?)/, /(.+?)/(?:, \[(.*?)\])?\],?$", line)
+                self.assertIsNotNone(m, f"unreadable {name} row: {line}")
+                params = tuple(re.findall(r"'([^']+)'", m.group(3) or ""))
+                rows.append((m.group(1).replace("\\/", "/"), m.group(2).replace("\\/", "/")) + ((params,) if m.group(3) else ()))
+            return rows
+
+        py_paths = [(h.pattern, p.pattern) for h, p in policy.AD_PATHS]
+        py_wrappers = [(h.pattern, p.pattern, tuple(params)) for h, p, params in policy.REDIRECTORS]
+        self.assertEqual(js_rules("AD_PATHS"), py_paths)
+        self.assertEqual(js_rules("REDIRECTORS"), py_wrappers)
+
     def test_allow_list_names_no_ad_host(self):
         allow = lists.read_list(lists.LISTS_DIR / "allow.txt")
         ads = lists.read_list(lists.LISTS_DIR / "ad-hosts.txt")

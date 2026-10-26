@@ -9,8 +9,10 @@ read (``UnreadableURL``), so the caller can fail closed.
 
 from __future__ import annotations
 
+import bisect
 import codecs
 import ipaddress
+import os
 import re
 import unicodedata
 from collections import namedtuple
@@ -21,8 +23,6 @@ SPECIAL_SCHEMES = {"http": 80, "https": 443, "ws": 80, "wss": 443, "ftp": 21, "f
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
 # Forbidden domain code points (WHATWG "forbidden domain code point"): C0 controls, space, % and these.
 _FORBIDDEN_HOST = set("\x00\t\n\r #/:<>?@[\\]^|%\x7f") | {chr(c) for c in range(0x20)}
-# Label separators UTS 46 maps to a full stop.
-_DOTS = re.compile("[。．｡]")
 
 
 class UnreadableURL(ValueError):
@@ -192,31 +192,60 @@ def parse_host(text: str) -> str:
     return ascii_host
 
 
-def domain_to_ascii(domain: str) -> str:
-    """Lower-case ASCII form of a domain: NFKC-mapped (full-width letters and dots), punycode for Unicode labels.
+_UTS46 = None
 
-    Python's idna codec is IDNA 2003, a stricter cousin of the UTS 46 mapping browsers use; a label it cannot
-    encode is reported unreadable rather than guessed.
-    """
-    mapped = _DOTS.sub(".", unicodedata.normalize("NFKC", domain)).lower()
+
+def _uts46() -> tuple:
+    """(refused range starts, their ends, mapped code points) from uts46.txt, loaded on first use."""
+    global _UTS46
+    if _UTS46 is None:
+        starts, ends, mapped = [], [], {}
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "uts46.txt"), encoding="ascii") as fh:
+            for line in fh:
+                parts = line.split()
+                if parts and parts[0] == "R":
+                    starts.append(int(parts[1], 16))
+                    ends.append(int(parts[2], 16))
+                elif parts and parts[0] == "M":
+                    mapped[int(parts[1], 16)] = "".join(chr(int(x, 16)) for x in parts[2:])
+        _UTS46 = (starts, ends, mapped)
+    return _UTS46
+
+
+def uts46_map(domain: str) -> str:
+    """The UTS 46 mapping step a browser runs on a host: case-fold, map compatibility forms (full-width letters,
+    ideographic full stops), drop default-ignorables (variation selectors, soft hyphens), refuse disallowed code
+    points, then NFC. The table is scripts/gen_uts46.js's reading of Node's own parser (ICU), not Python's
+    Unicode 3.2 idna codec, which keeps characters a browser drops."""
+    starts, ends, mapped = _uts46()
+    out = []
+    for ch in domain:
+        cp = ord(ch)
+        if cp < 0x80:
+            out.append(ch.lower())
+            continue
+        i = bisect.bisect_right(starts, cp) - 1
+        if i >= 0 and cp <= ends[i]:
+            raise UnreadableURL(f"U+{cp:04X} in host {domain!r}: browsers refuse it")
+        out.append(mapped.get(cp, ch))
+    return unicodedata.normalize("NFC", "".join(out))
+
+
+def domain_to_ascii(domain: str) -> str:
+    """Lower-case ASCII form of a domain as a browser computes it: UTS 46 mapping, then punycode per Unicode label."""
+    mapped = domain.lower() if domain.isascii() else uts46_map(domain)
     if any(ch in _FORBIDDEN_HOST for ch in mapped):
         raise UnreadableURL(f"forbidden character in host {domain!r}")
     labels = mapped.split(".")
     if labels and labels[-1] == "" and len(labels) > 1:
         labels = labels[:-1]  # one trailing dot is the same host ("evil.com." is "evil.com")
-    if "\u200c" in mapped or "\u200d" in mapped:
-        raise UnreadableURL(f"zero-width joiner in host {domain!r}")  # browsers refuse these (CheckJoiners)
     out = []
     for label in labels:
         if label.isascii():
             out.append(label)
             continue
         try:
-            if "ß" in label or "ς" in label:
-                # Browsers keep ß and ς (UTS 46 nontransitional); the stdlib codec would fold them to ss and σ.
-                out.append("xn--" + codecs.encode(label, "punycode").decode("ascii"))
-            else:
-                out.append(codecs.encode(label, "idna").decode("ascii"))
+            out.append("xn--" + codecs.encode(label, "punycode").decode("ascii"))
         except UnicodeError as exc:
             raise UnreadableURL(f"cannot convert host label {label!r} to punycode") from exc
     if not out or "" in out:

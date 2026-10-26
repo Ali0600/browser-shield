@@ -51,8 +51,8 @@
  {
   "id": "urls-no-default-scheme",
   "file": "browser_shield/urls.py",
-  "old": "        return [f\"{default_scheme}://{s}\"]",
-  "new": "        return [s]",
+  "old": "    if not m:\n        return [f\"{default_scheme}://{s}\"]",
+  "new": "    if not m:\n        return [s]",
   "expect": "test_missing_scheme_defaults_to_https"
  },
  {
@@ -86,8 +86,8 @@
  {
   "id": "policy-script-nav-unchecked",
   "file": "browser_shield/policy.py",
-  "old": "    for m in _JS_NAVIGATION.finditer(text):",
-  "new": "    for m in _JS_NAVIGATION.finditer(\"\"):",
+  "old": "    for m in _JS_SINK.finditer(text):",
+  "new": "    for m in _JS_SINK.finditer(\"\"):",
   "expect": "test_script_navigation_to_a_bad_host_is_denied"
  },
  {
@@ -96,13 +96,6 @@
   "old": "    for host_rx, path_rx in AD_PATHS:",
   "new": "    for host_rx, path_rx in []:",
   "expect": "test_ad_click_paths"
- },
- {
-  "id": "policy-private-ip-public",
-  "file": "browser_shield/policy.py",
-  "old": "    return ip.is_private or ip.is_loopback or ip.is_link_local",
-  "new": "    return False",
-  "expect": "test_bare_public_ips_ask_private_ones_pass"
  },
  {
   "id": "policy-typing-unchecked",
@@ -114,8 +107,8 @@
  {
   "id": "policy-url-secret-unchecked",
   "file": "browser_shield/policy.py",
-  "old": "    for leak in leaks.find_leaks(urls.preprocess(raw)):",
-  "new": "    for leak in leaks.find_leaks(\"\"):",
+  "old": "    _leak_verdict(found, where, True, v, \"the URL carries\")",
+  "new": "    pass",
   "expect": "test_secrets_in_urls_are_denied"
  },
  {
@@ -177,8 +170,8 @@
  {
   "id": "guard-crash-not-caught",
   "file": "hooks/guard.py",
-  "old": "    except Exception as exc:  # the guard must never take the browser down with it",
-  "new": "    except ZeroDivisionError as exc:  # the guard must never take the browser down with it",
+  "old": "    except Exception as exc:  # unreadable hook input",
+  "new": "    except ZeroDivisionError as exc:  # unreadable hook input",
   "expect": "test_broken_input_lets_the_call_through_loudly"
  },
  {
@@ -205,9 +198,9 @@
  {
   "id": "shield-ignores-enforcement",
   "file": "page/shield.js",
-  "old": "    if (document.querySelector(ENFORCEMENT)) {",
-  "new": "    if (false) {",
-  "expect": "enforcement notice"
+  "old": "      if (document.querySelector(sel)) {",
+  "new": "      if (false) {",
+  "expect": "ad-blocker notice"
  },
  {
   "id": "shield-click-bubble",
@@ -224,13 +217,6 @@
   "expect": "pop-ups are refused"
  },
  {
-  "id": "shield-youtube-requests-blocked",
-  "file": "page/shield.js",
-  "old": "  if (!isYouTube) {\n    const realFetch",
-  "new": "  if (true) {\n    const realFetch",
-  "expect": "left alone on it"
- },
- {
   "id": "shield-not-idempotent",
   "file": "page/shield.js",
   "old": "  if (w.__browserShield) return w.__browserShield.status();",
@@ -242,6 +228,503 @@
   "file": "page/shield.js",
   "old": "  w.confirm = answer('confirm (answered Cancel)', false);",
   "new": "  w.confirm = answer('confirm (answered Cancel)', true);",
-  "expect": "dialogs and permission prompts"
+  "expect": "dialogs, permissions"
+ },
+ {
+  "id": "policy-local-files-allowed",
+  "file": "browser_shield/policy.py",
+  "old": "    if urls.is_local_path(clean):\n",
+  "new": "    if False:\n",
+  "expect": "test_local_files_ask_and_remote_shares_are_denied"
+ },
+ {
+  "id": "urls-tilde-not-local",
+  "file": "browser_shield/urls.py",
+  "old": "return s.startswith((\"/\", \"\\\\\", \"~\", \".\")) and not s.startswith(\"//\")",
+  "new": "return s.startswith((\"/\", \"\\\\\", \".\")) and not s.startswith(\"//\")",
+  "expect": "test_local_paths"
+ },
+ {
+  "id": "policy-file-share-asks",
+  "file": "browser_shield/policy.py",
+  "old": "        if t.file_host:\n",
+  "new": "        if False:\n",
+  "expect": "test_local_files_ask_and_remote_shares_are_denied"
+ },
+ {
+  "id": "policy-userinfo-silent",
+  "file": "browser_shield/policy.py",
+  "old": "    if t.userinfo:\n",
+  "new": "    if False:\n",
+  "expect": "test_credentials_before_the_host_ask_or_deny"
+ },
+ {
+  "id": "policy-no-ask-hosts",
+  "file": "browser_shield/policy.py",
+  "old": "    asked = lists.asked_by(t.host)\n",
+  "new": "    asked = None\n",
+  "expect": "test_payment_and_account_pages_ask"
+ },
+ {
+  "id": "policy-no-ask-paths",
+  "file": "browser_shield/policy.py",
+  "old": "    for host_rx, path_rx in ASK_PATHS:\n",
+  "new": "    for host_rx, path_rx in []:\n",
+  "expect": "test_payment_and_account_pages_ask"
+ },
+ {
+  "id": "policy-no-unwrap",
+  "file": "browser_shield/policy.py",
+  "old": "    if depth < 2:\n",
+  "new": "    if depth < 0:\n",
+  "expect": "test_link_wrappers_are_judged_by_their_destination"
+ },
+ {
+  "id": "policy-dot-local-allowed",
+  "file": "browser_shield/policy.py",
+  "old": "    if host.endswith(\".local\"):\n",
+  "new": "    if host.endswith(\".nowhere\"):\n",
+  "expect": "test_bare_public_ips_and_the_local_network_ask_loopback_passes"
+ },
+ {
+  "id": "policy-lan-allowed",
+  "file": "browser_shield/policy.py",
+  "old": "    if ip.is_private or ip.is_link_local:\n",
+  "new": "    if False:\n",
+  "expect": "test_bare_public_ips_and_the_local_network_ask_loopback_passes"
+ },
+ {
+  "id": "policy-evasion-allowed",
+  "file": "browser_shield/policy.py",
+  "old": "    if _EVASION.search(text):\n",
+  "new": "    if False:\n",
+  "expect": "test_hiding_youtubes_enforcement_notice_is_refused"
+ },
+ {
+  "id": "policy-soft-keys-denied",
+  "file": "browser_shield/policy.py",
+  "old": "        decision = ASK if soft and leak.kind in leaks.SOFT_IN_URLS else DENY",
+  "new": "        decision = DENY",
+  "expect": "test_public_keys_and_tokens_in_urls_ask_but_typed_ones_are_denied"
+ },
+ {
+  "id": "policy-no-unquote-scan",
+  "file": "browser_shield/policy.py",
+  "old": "    for extra in leaks.find_leaks(unquote(clean)):",
+  "new": "    for extra in leaks.find_leaks(clean):",
+  "expect": "test_secrets_in_urls_are_denied"
+ },
+ {
+  "id": "policy-uploads-silent",
+  "file": "browser_shield/policy.py",
+  "old": "    elif tool in (\"file_upload\", \"upload_image\"):",
+  "new": "    elif tool in (\"file_upload_x\",):",
+  "expect": "test_uploads_ask"
+ },
+ {
+  "id": "policy-terminal-unguarded",
+  "file": "browser_shield/policy.py",
+  "old": "    if tool_name in SHELL_TOOLS:\n",
+  "new": "    if tool_name == \"Bash\":\n",
+  "expect": "test_clickfix_shapes_ask"
+ },
+ {
+  "id": "policy-reminder-after-rewrite",
+  "file": "browser_shield/policy.py",
+  "old": " or text.lstrip().startswith(\"// browser-shield page script\")",
+  "new": "",
+  "expect": "test_no_reminder_after_the_rewrite_either"
+ },
+ {
+  "id": "urls-scheme-relative-raw",
+  "file": "browser_shield/urls.py",
+  "old": "    if s.startswith(\"//\"):\n        return",
+  "new": "    if s.startswith(\"///\"):\n        return",
+  "expect": "test_missing_scheme_defaults_to_https"
+ },
+ {
+  "id": "urls-host-port-as-scheme",
+  "file": "browser_shield/urls.py",
+  "old": "        return [f\"{default_scheme}://{s}\"]  # host:port",
+  "new": "        return [s, f\"{default_scheme}://{s}\"]  # host:port",
+  "expect": "test_dev_servers_by_host_and_port_pass"
+ },
+ {
+  "id": "urls-no-length-cap",
+  "file": "browser_shield/urls.py",
+  "old": "    if len(raw) > MAX_LENGTH:",
+  "new": "    if len(raw) > 10 * MAX_LENGTH:",
+  "expect": "test_oversized_and_control_characters_are_unreadable"
+ },
+ {
+  "id": "urls-zone-id-ok",
+  "file": "browser_shield/urls.py",
+  "old": "        if \"%\" in text:\n",
+  "new": "        if False:\n",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-joiners-ok",
+  "file": "browser_shield/urls.py",
+  "old": "    if \"\\u200c\" in mapped or \"\\u200d\" in mapped:",
+  "new": "    if False:",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-sharp-s-folded",
+  "file": "browser_shield/urls.py",
+  "old": "            if \"ß\" in label or \"ς\" in label:",
+  "new": "            if False:",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "leaks-no-env",
+  "file": "browser_shield/leaks.py",
+  "old": "    for name, value in env_secrets(environ).items():",
+  "new": "    for name, value in {}.items():",
+  "expect": "test_environment_secrets_are_refused_by_value"
+ },
+ {
+  "id": "guard-fast-path-everything",
+  "file": "hooks/guard.py",
+  "old": "SHELL_WORDS = re.compile(r\"curl|wget|base64|xattr|spctl|installer|hdiutil\")",
+  "new": "SHELL_WORDS = re.compile(r\"curl|wget|base64|xattr|spctl|installer\")",
+  "expect": "test_the_hooks_fast_path_never_skips_a_lure"
+ },
+ {
+  "id": "guard-no-landing-check",
+  "file": "hooks/guard.py",
+  "old": "    landed = policy.landed_on_blocked(tool, response, Lists())",
+  "new": "    landed = None",
+  "expect": "test_post_tool_use_reports_a_blocked_landing"
+ },
+ {
+  "id": "guard-no-injection-note",
+  "file": "hooks/guard.py",
+  "old": "    phrase = policy.injection_phrase(tool, response)",
+  "new": "    phrase = None",
+  "expect": "test_post_tool_use_flags_injection_text"
+ },
+ {
+  "id": "shield-ssap-seeks-video",
+  "file": "page/shield.js",
+  "old": "    if (ssap) {",
+  "new": "    if (false) {",
+  "expect": "server-stitched ad"
+ },
+ {
+  "id": "shield-full-length-seek",
+  "file": "page/shield.js",
+  "old": "    if (length && d >= length - 1) {",
+  "new": "    if (false) {",
+  "expect": "as long as the video"
+ },
+ {
+  "id": "shield-patches-youtube",
+  "file": "page/shield.js",
+  "old": "  if (!isYouTube) {",
+  "new": "  if (true) {",
+  "expect": "no built-in function is replaced"
+ },
+ {
+  "id": "shield-nav-not-cancelled",
+  "file": "page/shield.js",
+  "old": "      if (why) cancel(e, 'navigationsBlocked', 'navigation blocked', why);",
+  "new": "      void why;",
+  "expect": "page-started navigations"
+ },
+ {
+  "id": "shield-form-not-cancelled",
+  "file": "page/shield.js",
+  "old": "    if (why) cancel(e, 'clicksBlocked', 'form post blocked', why);",
+  "new": "    void why;",
+  "expect": "form posts"
+ },
+ {
+  "id": "shield-clipboard-open",
+  "file": "page/shield.js",
+  "old": "      navigator.clipboard.writeText = refused('clipboard write');",
+  "new": "",
+  "expect": "clipboard"
+ },
+ {
+  "id": "shield-interruptions-ignored",
+  "file": "page/shield.js",
+  "old": "    ['a[href*=\"support.google.com/youtube/answer/3037019\"]', '\"Experiencing interruptions?\" link'],",
+  "new": "",
+  "expect": "Experiencing interruptions"
+ },
+ {
+  "id": "guard-crash-judging-allows",
+  "file": "hooks/guard.py",
+  "old": "    except Exception as exc:\n        # The call is known",
+  "new": "    except ZeroDivisionError as exc:\n        # The call is known",
+  "expect": "test_a_guard_crash_while_judging_a_call_refuses_it"
+ },
+ {
+  "id": "rf-local-roots-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "    if path.startswith(\"/\") and ctx.inside_roots(path):\n        return\n",
+  "new": "",
+  "expect": "test_the_sessions_own_files_open_without_asking"
+ },
+ {
+  "id": "rf-symlink-escape",
+  "file": "browser_shield/policy.py",
+  "old": "        real = os.path.realpath(path)\n",
+  "new": "        real = os.path.normpath(path)\n",
+  "expect": "test_a_symlink_out_of_the_project_still_asks"
+ },
+ {
+  "id": "rf-extensions-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "        if m and m.group(1).lower() in lists.extensions:\n",
+  "new": "        if False:\n",
+  "expect": "test_listed_extension_opens_others_ask"
+ },
+ {
+  "id": "rf-lure-no-boundary",
+  "file": "browser_shield/policy.py",
+  "old": "(ba|z|da|k)?sh\\b(?=\\s*(?:$|[;&|)<>\\n]|-))\"),\n     \"pipes",
+  "new": "(ba|z|da|k)?sh\\b\"),\n     \"pipes",
+  "expect": "test_lure_text_that_is_only_quoted_passes"
+ },
+ {
+  "id": "rf-fetch-asks-payments",
+  "file": "browser_shield/policy.py",
+  "old": "    if not ctx.fetch_only:  # WebFetch has no session to pay from and saves nothing\n",
+  "new": "    if True:  # WebFetch has no session to pay from and saves nothing\n",
+  "expect": "test_webfetch_reads_scripts_and_payment_docs"
+ },
+ {
+  "id": "rf-source-views-download",
+  "file": "browser_shield/policy.py",
+  "old": "        if ext in DOWNLOAD_EXT and not any(h.search(t.host) and pth.search(t.path) for h, pth in SOURCE_VIEWS):",
+  "new": "        if ext in DOWNLOAD_EXT:",
+  "expect": "test_source_views_are_pages_not_downloads"
+ },
+ {
+  "id": "rf-shell-reads-lists",
+  "file": "hooks/guard.py",
+  "old": "        lists = None if shell else Lists()  # shell rules read no list: a list problem must not touch Bash",
+  "new": "        lists = Lists()",
+  "expect": "test_shell_calls_never_read_the_lists"
+ },
+ {
+  "id": "rf-unreadable-passes",
+  "file": "hooks/guard.py",
+  "old": "        if b'\"PreToolUse\"' in raw:",
+  "new": "        if False:",
+  "expect": "test_deeply_nested_input_is_refused_not_passed"
+ },
+ {
+  "id": "rf-number-not-text",
+  "file": "browser_shield/policy.py",
+  "old": "    if isinstance(text, (int, float)) and not isinstance(text, bool):\n        text = str(text)\n",
+  "new": "",
+  "expect": "test_numbers_and_key_presses_are_text"
+ },
+ {
+  "id": "rf-keys-unchecked",
+  "file": "browser_shield/policy.py",
+  "old": "    elif tool == \"computer\" and inp.get(\"action\") in (\"type\", \"key\"):",
+  "new": "    elif tool == \"computer\" and inp.get(\"action\") in (\"type\",):",
+  "expect": "test_numbers_and_key_presses_are_text"
+ },
+ {
+  "id": "rf-gif-silent",
+  "file": "browser_shield/policy.py",
+  "old": "    elif tool == \"gif_creator\" and (inp.get(\"download\") or inp.get(\"coordinate\")):",
+  "new": "    elif False:",
+  "expect": "test_gif_export_asks"
+ },
+ {
+  "id": "rf-launch-unread",
+  "file": "browser_shield/policy.py",
+  "old": "        for url in launch_urls(tool_input.get(\"name\"), ctx):",
+  "new": "        for url in []:",
+  "expect": "test_a_named_dev_server_with_a_remote_url_is_judged"
+ },
+ {
+  "id": "rf-ask-drops-rewrite",
+  "file": "hooks/guard.py",
+  "old": "        updated = policy.rewrite(tool, tool_input) if verdict.decision != policy.DENY else None",
+  "new": "        updated = policy.rewrite(tool, tool_input) if verdict.decision == policy.ALLOW else None",
+  "expect": "test_an_ask_keeps_the_page_script_rewrite"
+ },
+ {
+  "id": "rf-reasons-unredacted",
+  "file": "hooks/guard.py",
+  "old": "        reasons = [leaks.redact(r) for r in verdict.reasons]",
+  "new": "        reasons = list(verdict.reasons)",
+  "expect": "test_no_secret_reaches_the_reason_or_the_log"
+ },
+ {
+  "id": "rf-batch-not-scanned",
+  "file": "browser_shield/policy.py",
+  "old": "        \"get_page_text\", \"read_page\", \"find\", \"javascript_tool\", \"WebFetch\", \"browser_batch\"",
+  "new": "        \"get_page_text\", \"read_page\", \"find\", \"javascript_tool\", \"WebFetch\"",
+  "expect": "test_batch_responses_are_scanned_for_injection_text"
+ },
+ {
+  "id": "rf-landing-unanchored",
+  "file": "browser_shield/policy.py",
+  "old": "    for raw in re.findall(r\"(?m)^(?:\\[navigate\\] )?navigated to (\\S+)\", text):",
+  "new": "    for raw in re.findall(r\"navigated to (\\S+)\", text):",
+  "expect": "test_page_text_cannot_fake_a_redirect"
+ },
+ {
+  "id": "rf-index-error-locks",
+  "file": "browser_shield/lists.py",
+  "old": "        except sqlite3.Error as exc:",
+  "new": "        except ZeroDivisionError as exc:",
+  "expect": "test_a_damaged_index_degrades_loudly_instead_of_locking"
+ },
+ {
+  "id": "rf-jwt-quadratic",
+  "file": "browser_shield/leaks.py",
+  "old": "        if \"eyJ\" not in token:\n            continue\n",
+  "new": "",
+  "expect": "test_jwt_scan_is_linear"
+ },
+ {
+  "id": "ps-no-upgrade",
+  "file": "page/shield.js",
+  "old": "    prior.off();  // an older version stands down",
+  "new": "    return prior.status(); // an older version stands down",
+  "expect": "PS-01"
+ },
+ {
+  "id": "ps-no-wrappers",
+  "file": "page/shield.js",
+  "old": "    for (const [hr, pr, params] of REDIRECTORS) {",
+  "new": "    for (const [hr, pr, params] of []) {",
+  "expect": "PS-02"
+ },
+ {
+  "id": "ps-mailto-safe",
+  "file": "page/shield.js",
+  "old": "  const SAFE_SCHEMES = new Set(['http:', 'https:', 'about:', 'javascript:']);",
+  "new": "  const SAFE_SCHEMES = new Set(['http:', 'https:', 'about:', 'javascript:', 'mailto:']);",
+  "expect": "PS-02"
+ },
+ {
+  "id": "ps-same-origin-scripts",
+  "file": "page/shield.js",
+  "old": "    if (sameOrigin ? INSTALLER_EXT.test(last) : DOWNLOAD_EXT.test(last)) return `download ${last}`;",
+  "new": "    if (DOWNLOAD_EXT.test(last)) return `download ${last}`;",
+  "expect": "PS-08"
+ },
+ {
+  "id": "ps-same-document-cancelled",
+  "file": "page/shield.js",
+  "old": "      if (!state.enabled || !e.cancelable || (e.destination && e.destination.sameDocument)) return;",
+  "new": "      if (!state.enabled || !e.cancelable) return;",
+  "expect": "PS-08"
+ },
+ {
+  "id": "ps-self-open-refused",
+  "file": "page/shield.js",
+  "old": "      if (t === '_self' || t === '_top' || t === '_parent') {",
+  "new": "      if (false) {",
+  "expect": "PS-09"
+ },
+ {
+  "id": "ps-blank-without-click",
+  "file": "page/shield.js",
+  "old": "      if ((u && u.origin === location.origin) || (blank && clicked)) return real.call(this, url, target, ...rest);",
+  "new": "      if ((u && u.origin === location.origin) || blank) return real.call(this, url, target, ...rest);",
+  "expect": "PS-09"
+ },
+ {
+  "id": "ps-off-sticks",
+  "file": "page/shield.js",
+  "old": "      obj[name] = function (...args) { return state.enabled ? fake.apply(this, args) : real.apply(this, args); };",
+  "new": "      obj[name] = function (...args) { return fake.apply(this, args); };",
+  "expect": "PS-10"
+ },
+ {
+  "id": "ps-no-reenable",
+  "file": "page/shield.js",
+  "old": "      if (!s.enabled && prior.on) prior.on();",
+  "new": "",
+  "expect": "PS-10"
+ },
+ {
+  "id": "ps-stand-down-muted",
+  "file": "page/shield.js",
+  "old": "      if (document.querySelector(sel)) {\n        standDown();",
+  "new": "      if (document.querySelector(sel)) {",
+  "expect": "PS-05"
+ },
+ {
+  "id": "ps-no-length-seeks",
+  "file": "page/shield.js",
+  "old": "    if (!length || Math.abs(d - length) <= 1.5) {",
+  "new": "    if (length && Math.abs(d - length) <= 1.5) {",
+  "expect": "PS-04"
+ },
+ {
+  "id": "ps-long-ad-kept",
+  "file": "page/shield.js",
+  "old": "    if (!length || Math.abs(d - length) <= 1.5) {",
+  "new": "    if (!length || d >= length - 1) {",
+  "expect": "PS-03"
+ },
+ {
+  "id": "ps-ssap-midroll-seeks",
+  "file": "page/shield.js",
+  "old": "      if (p && p.duration > 0 && video && Math.abs(p.current - video.currentTime) < 0.5 && p.current < p.duration - 0.25",
+  "new": "      if (p && p.duration > 0 && video && p.current < p.duration - 0.25",
+  "expect": "PS-06"
+ },
+ {
+  "id": "ps-shadow-blind",
+  "file": "page/shield.js",
+  "old": "    const path = e.composedPath ? e.composedPath() : [];",
+  "new": "    const path = [];",
+  "expect": "PS-13"
+ },
+ {
+  "id": "ps-fetch-url-object",
+  "file": "page/shield.js",
+  "old": "    const urlOf = (input) => (input && typeof input === 'object' && 'url' in input ? input.url : input == null ? '' : String(input));",
+  "new": "    const urlOf = (input) => (typeof input === 'string' ? input : input && input.url);",
+  "expect": "PS-14"
+ },
+ {
+  "id": "ps-geo-shape",
+  "file": "page/shield.js",
+  "old": "  const geoError = { code: 1, message: 'denied by browser-shield', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };",
+  "new": "  const geoError = { code: 1, message: 'denied by browser-shield' };",
+  "expect": "PS-16"
+ },
+ {
+  "id": "ps-help-link-anywhere",
+  "file": "page/shield.js",
+  "old": "      .map((c) => `${c} a[href*=\"support.google.com/youtube/answer/3037019\"]`).join(', '), '\"Experiencing interruptions?\" link'],",
+  "new": "      .map((c) => `a[href*=\"support.google.com/youtube/answer/3037019\"]`).join(', '), '\"Experiencing interruptions?\" link'],",
+  "expect": "PS-17"
+ },
+ {
+  "id": "pin-js-wrappers",
+  "file": "page/shield.js",
+  "old": "    [/^out\\.reddit\\.com$/, /^\\//, ['url']],",
+  "new": "    [/^out\\.reddit\\.com$/, /^\\//, ['url', 'u']],",
+  "expect": "test_page_script_carries_the_same_ad_paths_and_link_wrappers"
+ },
+ {
+  "id": "lure-two-step-gone",
+  "file": "browser_shield/policy.py",
+  "old": "     \"downloads a script and then runs it\"),",
+  "new": "     \"downloads a script and then runs it\") if False else (re.compile(r\"(?!)\"), \"x\"),",
+  "expect": "test_clickfix_shapes_ask"
+ },
+ {
+  "id": "lure-procsub-gone",
+  "file": "browser_shield/policy.py",
+  "old": "(re.compile(r\"\\b((ba|z|da|k)?sh|source|\\.)\\s+<\\(",
+  "new": "(re.compile(r\"(?!)\\b((ba|z|da|k)?sh|source|\\.)\\s+<\\(",
+  "expect": "test_clickfix_shapes_ask"
  }
 ]

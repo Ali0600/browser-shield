@@ -295,3 +295,160 @@ test('the hiding style never hides #player-ads (uBlock Origin un-hides it on pur
   assert.doesNotMatch(page.appended[0].textContent, /#player-ads/);
   assert.match(page.appended[0].textContent, /ytd-ad-slot-renderer/);
 });
+
+// ---- the 2026-10-26 review's findings (PS-nn) ----------------------------------------------------------------------
+
+test('PS-01: an older version on the page stands down and the new one takes over', () => {
+  const page = makePage(WIKI);
+  let offCalled = 0;
+  page.window.__browserShield = { status: () => ({ version: 2, enabled: true }), off() { offCalled++; } };
+  const s = page.run();
+  assert.equal(offCalled, 1);
+  assert.equal(s.version, 3);
+  assert.equal(s.upgradedFrom, 2);
+});
+
+test('PS-02: ad-click paths, link wrappers and mailto: are judged like the guard hook does', () => {
+  const page = makePage('https://www.google.com/search?q=vpn');
+  page.run();
+  assert.equal(click(page, 'https://www.google.com/aclk?sa=l&ai=x&adurl=https://vpn.example/'), true);
+  assert.equal(click(page, 'https://www.youtube.com/pagead/aclk?x=1'), true);
+  assert.equal(click(page, 'https://www.youtube.com/redirect?q=https%3A%2F%2Fevil.example%2Fsetup.dmg'), true);
+  assert.equal(click(page, 'https://www.google.com/url?q=https://ad.doubleclick.net/x'), true);
+  assert.equal(click(page, 'mailto:someone@example.org'), true);
+  assert.equal(click(page, 'https://www.youtube.com/redirect?q=https%3A%2F%2Fen.wikipedia.org%2Fwiki%2FRoblox'), false);
+  assert.equal(click(page, 'https://www.google.com/search?q=https://ad.doubleclick.net'), false);
+});
+
+test('PS-08: a site\'s own pages named like scripts are pages; same-document navigations and plain forms pass', () => {
+  const page = makePage('https://github.com/ohmyzsh/ohmyzsh/blob/master/oh-my-zsh.sh');
+  page.run();
+  assert.equal(click(page, 'https://github.com/acmesh-official/acme.sh'), false);
+  assert.equal(click(page, 'https://github.com/ohmyzsh/ohmyzsh/blob/master/oh-my-zsh.sh#L10'), false);
+  assert.equal(click(page, 'https://github.com/x/y/releases/download/v1/app.dmg'), true, 'an installer stays a download');
+  assert.equal(click(page, 'https://codeload.github.com/x/y/zip/refs/heads/main.zip'), true, 'another site\'s archive too');
+  let cancelled = false;
+  for (const fn of page.navListeners) fn({ cancelable: true, destination: { url: 'https://github.com/x/y/blob/main/a.sh?plain=1', sameDocument: true }, downloadRequest: null, preventDefault() { cancelled = true; } });
+  assert.equal(cancelled, false);
+  let prevented = false;
+  page.listeners.submit[0].fn({ target: { getAttribute: () => null, action: 'https://github.com/ohmyzsh/ohmyzsh/blob/master/oh-my-zsh.sh' }, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+});
+
+test('PS-09: window.open into the same tab is a navigation, and a blank window needs a click', () => {
+  const page = makePage(WIKI);
+  page.run();
+  assert.deepEqual(page.window.open('https://docs.example.org/next', '_self'), { opened: 'https://docs.example.org/next' });
+  assert.equal(page.window.open('https://ad.doubleclick.net/x', '_self'), null);
+  assert.equal(page.window.open(), null, 'no click, no blank window (the start of a pop-under)');
+  page.context.navigator.userActivation = { isActive: true };
+  assert.deepEqual(page.window.open(), { opened: undefined });
+  assert.deepEqual(page.window.open('https://docs.example.org/print'), { opened: 'https://docs.example.org/print' });
+});
+
+test('PS-10: off() passes every replaced function through, and a later run switches the shield back on', () => {
+  const page = makePage(WIKI);
+  page.run();
+  page.window.__browserShield.off();
+  assert.throws(() => page.window.confirm('Close?'), /real confirm/);
+  assert.throws(() => page.window.alert('hi'), /real alert/);
+  const back = page.run();
+  assert.equal(back.enabled, true);
+  assert.equal(page.window.confirm('Close?'), false);
+});
+
+test('PS-05: standing down mid-ad gives the video its sound back', () => {
+  const player = makePlayer();
+  const signs = [];
+  const page = makePage(YT, { player, signs });
+  page.run();
+  player.classList.add('ad-showing');
+  Object.assign(player.video, { duration: 20, currentTime: 1, src: 'blob:ad' });
+  page.tickAll();
+  assert.equal(player.video.muted, true);
+  signs.push('ytd-enforcement-message-view-model');
+  page.tickAll();
+  assert.equal(player.video.muted, false);
+  assert.equal(page.window.browserShield().enforcement, true);
+});
+
+test('PS-04 and PS-11: with no video length the clip is never seeked, and content is never muted', () => {
+  const player = makePlayer({ lengthSeconds: 0 });
+  const page = makePage(YT, { player });
+  page.run();
+  player.classList.add('ad-showing');
+  Object.assign(player.video, { duration: 600, currentTime: 0.5 });
+  page.tickAll();
+  assert.equal(player.video.currentTime, 0.5);
+  assert.equal(player.video.muted, false);
+});
+
+test('PS-03: an ad longer than a short video is still skipped', () => {
+  const player = makePlayer({ lengthSeconds: 60 });
+  const page = makePage(YT, { player });
+  page.run();
+  player.classList.add('ad-showing');
+  Object.assign(player.video, { duration: 135.4, currentTime: 3, src: 'blob:ad' });
+  page.tickAll();
+  assert.equal(player.video.currentTime, 135.3);
+});
+
+test('PS-06: a stitched mid-roll whose progress is not the video clock is muted and left alone', () => {
+  const player = makePlayer({ debugInfo: 'SSAP, AD, s:4 t:303' });
+  const page = makePage(YT, { player });
+  page.run();
+  Object.assign(player.video, { duration: 630, currentTime: 303 });
+  player.progress = { duration: 30, current: 3 };
+  page.tickAll();
+  assert.deepEqual(player.seeks, []);
+  assert.equal(player.video.currentTime, 303);
+  assert.equal(player.video.muted, true);
+  assert.match(page.window.browserShield().log.join(' '), /left to end/);
+});
+
+test('PS-13: links inside shadow roots and SVG links are seen', () => {
+  const page = makePage(WIKI);
+  page.run();
+  const fire = (node) => {
+    let prevented = false;
+    const e = { target: { closest: () => null }, composedPath: () => [{ localName: 'span' }, node], preventDefault() { prevented = true; }, stopImmediatePropagation() {} };
+    for (const { fn } of page.listeners.click) fn(e);
+    return prevented;
+  };
+  assert.equal(fire({ localName: 'a', href: 'https://ad.doubleclick.net/clk', hasAttribute: () => false }), true);
+  const svgHref = { baseVal: 'zoommtg://zoom.us/join' };
+  assert.equal(fire({ localName: 'a', href: svgHref, getAttribute: () => null, getAttributeNS: () => 'zoommtg://zoom.us/join', hasAttribute: () => false }), true);
+  assert.equal(fire({ localName: 'a', href: 'https://growagarden.fandom.com/wiki/Pets', hasAttribute: () => false }), false);
+});
+
+test('PS-14 and PS-15: fetch with a URL object is judged, and a page-built blob: link is named for what it is', async () => {
+  const page = makePage(WIKI);
+  page.run();
+  await assert.rejects(page.window.fetch(new URL('https://securepubads.g.doubleclick.net/gampad/ads')), TypeError);
+  assert.equal(click(page, 'blob:https://growagarden.fandom.com/3f2a'), true);
+  assert.match(page.window.browserShield().log.join(' '), /built itself/);
+});
+
+test('PS-16: the replacements keep the shapes pages rely on', async () => {
+  const page = makePage(WIKI);
+  page.run();
+  let err = null;
+  page.context.navigator.geolocation.getCurrentPosition(() => {}, (e) => { err = e; });
+  assert.equal(err.code, err.PERMISSION_DENIED);
+  await assert.rejects(page.window.Element.prototype.requestPointerLock(), { name: 'NotAllowedError' });
+  let answered = null;
+  await page.window.Notification.requestPermission((r) => { answered = r; });
+  assert.equal(answered, 'denied');
+});
+
+test('PS-17: the interruptions link counts only inside the player or a notice', () => {
+  const asked = [];
+  const page = makePage(YT, { player: makePlayer() });
+  const realQS = page.context.document.querySelector;
+  page.context.document.querySelector = (sel) => { asked.push(sel); return realQS(sel); };
+  page.run();
+  page.tickAll();
+  const helpSelectors = asked.filter((s) => s.includes('3037019'));
+  assert.ok(helpSelectors.length > 0);
+  for (const sel of helpSelectors) for (const part of sel.split(',')) assert.match(part.trim(), /^(#movie_player|ytd-popup-container|tp-yt-paper-dialog|#error-screen|yt-playability-error-supported-renderers) /);
+});

@@ -41,7 +41,8 @@ def log(entry: dict) -> None:
 
 def once_per_session(session_id: str, key: str) -> bool:
     """True the first time key is seen in this session (a marker file), so a standing warning is shown once."""
-    marker = os.path.join(STATE_DIR, "sessions", f"{re.sub(r'[^A-Za-z0-9_.-]', '_', session_id or 'unknown')}.{key}")
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(session_id or "unknown"))[:80]
+    marker = os.path.join(STATE_DIR, "sessions", f"{safe}.{key}")
     if os.path.exists(marker):
         return False
     try:
@@ -50,6 +51,16 @@ def once_per_session(session_id: str, key: str) -> bool:
     except OSError:
         pass
     return True
+
+
+def safe_text(text: str) -> str:
+    """text with secrets masked, or a placeholder if the masking code itself cannot load."""
+    try:
+        from browser_shield import leaks
+
+        return leaks.redact(text)
+    except Exception:
+        return "(details withheld)"
 
 
 def deny(reason: str) -> dict:
@@ -63,34 +74,44 @@ def pre_tool_use(event: dict) -> dict:
             and not SHELL_WORDS.search(str(tool_input.get("command", ""))):
         return {}
     try:
-        from browser_shield import policy
+        from browser_shield import leaks, policy
         from browser_shield.lists import Lists
 
-        lists = Lists()
-        verdict = policy.evaluate(tool, tool_input, lists)
-        updated = policy.rewrite(tool, tool_input) if verdict.decision == policy.ALLOW else None
+        shell = policy.short_name(str(tool))[0] == "shell"
+        lists = None if shell else Lists()  # shell rules read no list: a list problem must not touch Bash
+        ctx = policy.Context(roots=(event.get("cwd"), event.get("scratchpad_dir")))
+        verdict = policy.evaluate(tool, tool_input, lists, ctx)
+        updated = policy.rewrite(tool, tool_input) if verdict.decision != policy.DENY else None
+        reasons = [leaks.redact(r) for r in verdict.reasons]  # reasons quote URLs and paths: never a secret
     except Exception as exc:
         # The call is known and could not be judged: refuse it. Failing open here would let any input that
         # crashes the parser walk past the guard.
-        log({"event": "PreToolUse", "tool": tool, "decision": "deny", "reasons": [f"guard error {exc!r}"]})
-        return deny(f"browser-shield: the guard failed on this call ({type(exc).__name__}: {exc}) and refuses it; "
+        what = f"{type(exc).__name__}: {safe_text(str(exc))[:200]}"
+        log({"event": "PreToolUse", "tool": tool, "decision": "deny", "reasons": [f"guard error {what}"]})
+        return deny(f"browser-shield: the guard failed on this call ({what}) and refuses it; "
                     "the guard's code needs a fix (~/projects/automation/browser-shield)")
     out: dict = {}
     if verdict.decision != policy.ALLOW:
-        log({"event": "PreToolUse", "tool": tool, "decision": verdict.decision, "reasons": verdict.reasons})
-        out = deny("browser-shield: " + " | ".join(verdict.reasons))
+        log({"event": "PreToolUse", "tool": tool, "decision": verdict.decision, "reasons": reasons})
+        out = deny("browser-shield: " + " | ".join(reasons))
         out["hookSpecificOutput"]["permissionDecision"] = verdict.decision
+        if updated is not None:  # asked: the user approves the call as it will run, page script included
+            out["hookSpecificOutput"]["updatedInput"] = updated
         return out
     if updated is not None:
         log({"event": "PreToolUse", "tool": tool, "decision": "rewrite", "reasons": ["browserShield() expanded"]})
         out["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "updatedInput": updated}
-    if policy.short_name(tool)[1] in ("navigate", "preview_start", "browser_batch", "WebFetch"):
+    if policy.short_name(str(tool))[1] in ("navigate", "preview_start", "browser_batch", "WebFetch"):
         update = "/usr/bin/python3 -I ~/projects/automation/browser-shield/scripts/update_lists.py"
-        if lists.index is None and once_per_session(event.get("session_id", ""), "no-index"):
+        session = event.get("session_id", "")
+        if lists.index_error and once_per_session(session, "index-error"):
+            out["systemMessage"] = (f"browser-shield: the downloaded blocklist index cannot be read ({lists.index_error}); "
+                                    f"only the curated lists are checked until it is rebuilt: {update} --compile")
+        elif lists.index is None and once_per_session(session, "no-index"):
             out["systemMessage"] = ("browser-shield: the malware and phishing lists are not installed, so only the "
                                     f"curated lists are checked. Run: {update}")
         elif lists.index is not None and time.time() - os.path.getmtime(lists.index) > STALE_AFTER \
-                and once_per_session(event.get("session_id", ""), "stale-index"):
+                and once_per_session(session, "stale-index"):
             days = int((time.time() - os.path.getmtime(lists.index)) // 86400)
             out["systemMessage"] = (f"browser-shield: the malware and phishing lists are {days} days old (phishing "
                                     f"domains live for days). Run: {update}")
@@ -127,14 +148,22 @@ def post_tool_use(event: dict) -> dict:
 
 
 def main() -> int:
+    raw = b""
     try:
         sys.path.insert(0, ROOT)
-        event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+        raw = sys.stdin.buffer.read()
+        event = json.loads(raw.decode("utf-8") or "{}")
+        if not isinstance(event, dict):
+            raise ValueError("hook input is not a JSON object")
         name = event.get("hook_event_name")
         out = pre_tool_use(event) if name == "PreToolUse" else post_tool_use(event) if name == "PostToolUse" else {}
-    except Exception as exc:  # unreadable hook input or a PostToolUse bug: nothing to refuse, so say so loudly
-        log({"event": "error", "error": repr(exc)})
-        out = {"systemMessage": f"browser-shield guard failed ({exc!r}); this call was not checked"}
+    except Exception as exc:
+        log({"event": "error", "error": type(exc).__name__})
+        if b'"PreToolUse"' in raw:
+            # A tool call too deeply nested or too odd to read is not let through unread.
+            out = deny(f"browser-shield: this call's input could not be read ({type(exc).__name__}); refused")
+        else:  # unreadable input from Claude Code itself, or a PostToolUse bug: nothing to refuse, so say so loudly
+            out = {"systemMessage": f"browser-shield guard failed ({type(exc).__name__}); this call was not checked"}
     if out:
         sys.stdout.write(json.dumps(out))
     return 0

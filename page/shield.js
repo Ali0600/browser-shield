@@ -6,15 +6,25 @@
 //   YouTube: skips each in-stream ad the moment it starts (mutes it, seeks it to its end), hides display ads, and
 //            reports YouTube's ad-blocker notice, error screens and stalls; on a notice it stands down for good and
 //            never hides or dismisses it. On YouTube it replaces no built-in function (YouTube watches for that).
-//   Any other site: hides common ad slots, cancels clicks, navigations and form posts to ad, app-launch and download
-//            targets, refuses cross-origin pop-ups, answers alert/confirm/prompt/print and "Leave site?" without a
-//            dialog, denies notification, location, camera, clipboard, fullscreen and keyboard-lock requests, and drops
-//            requests to ad-network hosts.
+//   Any other site: hides common ad slots, cancels clicks, navigations and form posts to ad-click, app-launch and
+//            download targets, refuses pop-ups nobody clicked for, answers alert/confirm/prompt/print and "Leave
+//            site?" without a dialog, denies notification, location, camera, clipboard, fullscreen and keyboard-lock
+//            requests, and drops requests to ad-network hosts.
 // It leaves local dev hosts (localhost, 127.x, *.localhost, *.test) alone: the app under test must behave as built.
+// It is not a security boundary: it runs in the page's own world, after the page's code (the guard hook is the
+// boundary); it stops accidents and ads, and a hostile page can undo it.
 (() => {
-  const VERSION = 2;
+  const VERSION = 3;
   const w = window;
-  if (w.__browserShield) return w.__browserShield.status();
+  const prior = w.__browserShield;
+  if (prior) {
+    const s = prior.status();
+    if ((s.version || 0) >= VERSION) {
+      if (!s.enabled && prior.on) prior.on();
+      return prior.status();
+    }
+    prior.off();  // an older version stands down (its wrappers pass through) and this one takes over
+  }
 
   const host = location.hostname.toLowerCase();
   if (/^(localhost|127(\.\d{1,3}){3}|\[::1\])$|\.(localhost|test)$/.test(host) && !w.__browserShieldOnLocal) {
@@ -28,8 +38,23 @@
     'googletagservices.com', 'mgid.com', 'moatads.com', 'outbrain.com', 'popads.net', 'propellerads.com',
     'pubmatic.com', 'revcontent.com', 'rubiconproject.com', 'taboola.com', 'teads.tv',
   ];
+  // The same ad-click paths and link wrappers as AD_PATHS and REDIRECTORS in browser_shield/policy.py (a test pins them).
+  const AD_PATHS = [
+    [/(^|\.)google\.[a-z.]+$/, /^\/(aclk|pagead\/)/],
+    [/(^|\.)youtube\.com$/, /^\/pagead\//],
+  ];
+  const REDIRECTORS = [
+    [/(^|\.)google\.[a-z.]+$/, /^\/url$/, ['q', 'url']],
+    [/(^|\.)youtube\.com$/, /^\/redirect$/, ['q']],
+    [/^l[m]?\.facebook\.com$/, /^\/l\.php$/, ['u']],
+    [/^l\.instagram\.com$/, /^\/$/, ['u']],
+    [/^out\.reddit\.com$/, /^\//, ['url']],
+    [/^steamcommunity\.com$/, /^\/linkfilter\/?$/, ['url', 'u']],
+  ];
   const DOWNLOAD_EXT = /\.(dmg|pkg|mpkg|exe|msi|bat|cmd|scr|ps1|sh|command|tool|scpt|applescript|workflow|terminal|jar|deb|rpm|apk|ipa|iso|img|bin|run|appimage|xpi|crx|zip|rar|7z|tar|gz|tgz|bz2|xz)$/i;
-  const SAFE_SCHEMES = new Set(['http:', 'https:', 'about:', 'javascript:', 'mailto:']);
+  // Installers and executables: a download even from the page's own site (a repo page named acme.sh is not one).
+  const INSTALLER_EXT = /\.(dmg|pkg|mpkg|exe|msi|bat|cmd|scr|ps1|command|tool|scpt|applescript|workflow|terminal|jar|deb|rpm|apk|ipa|iso|img|appimage|xpi|crx)$/i;
+  const SAFE_SCHEMES = new Set(['http:', 'https:', 'about:', 'javascript:']);
   const isYouTube = /(^|\.)youtube(-nocookie)?\.com$/.test(host);
 
   const state = {
@@ -47,14 +72,32 @@
   };
   const toURL = (u) => { try { return new URL(String(u), location.href); } catch { return null; } };
   // Why following this link would be harmful, or '' when it is fine.
-  const linkVerdict = (href, isDownload) => {
+  const linkVerdict = (href, isDownload, depth = 0) => {
     const u = toURL(href);
     if (!u) return '';
+    if (u.protocol === 'blob:' || u.protocol === 'data:') {
+      return `a file the page built itself (${u.protocol}), the way pages smuggle a download past filters`;
+    }
     if (!SAFE_SCHEMES.has(u.protocol)) return `opens ${u.protocol} (an app or a local resource)`;
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
-    if (listed(u.hostname)) return `ad click through ${u.hostname}`;
+    const h = u.hostname.toLowerCase();
+    if (listed(h)) return `ad click through ${h}`;
+    for (const [hr, pr] of AD_PATHS) if (hr.test(h) && pr.test(u.pathname)) return `ad click through ${h}${u.pathname}`;
+    if (depth < 2) {
+      for (const [hr, pr, params] of REDIRECTORS) {
+        if (!hr.test(h) || !pr.test(u.pathname)) continue;
+        for (const p of params) {
+          for (const target of u.searchParams.getAll(p)) {
+            const why = linkVerdict(target, false, depth + 1);
+            if (why) return `${why} (behind the link wrapper ${h})`;
+          }
+        }
+      }
+    }
     const last = u.pathname.split('/').pop();
-    if (isDownload || DOWNLOAD_EXT.test(last)) return `download ${last || u.hostname}`;
+    const sameOrigin = u.origin === location.origin;
+    if (isDownload) return `download ${last || h}`;
+    if (sameOrigin ? INSTALLER_EXT.test(last) : DOWNLOAD_EXT.test(last)) return `download ${last}`;
     return '';
   };
   const cancel = (e, counter, kind, why) => {
@@ -63,27 +106,44 @@
     state[counter]++;
     note(kind, why);
   };
+  // The link an event came from, through shadow roots, with SVG <a> elements read by their attribute.
+  const linkOf = (e) => {
+    const path = e.composedPath ? e.composedPath() : [];
+    const nodes = path.length ? path : [e.target];
+    for (const n of nodes) {
+      const tag = n && n.localName;
+      if (tag === 'a' || tag === 'area') {
+        const href = typeof n.href === 'string' ? n.href
+          : (n.getAttribute && (n.getAttribute('href') || n.getAttributeNS && n.getAttributeNS('http://www.w3.org/1999/xlink', 'href')));
+        if (href) return { href, download: Boolean(n.hasAttribute && n.hasAttribute('download')) };
+      }
+    }
+    const a = e.target && e.target.closest && e.target.closest('a[href], area[href]');
+    return a ? { href: a.href, download: a.hasAttribute('download') } : null;
+  };
 
   // ---- clicks and form posts to ad, app-launch and download targets (listeners, not patches: safe on YouTube) ----
   const onClick = (e) => {
     if (!state.enabled) return;
-    const a = e.target && e.target.closest && e.target.closest('a[href], area[href]');
-    if (!a) return;
-    const why = linkVerdict(a.href, a.hasAttribute('download'));
+    const link = linkOf(e);
+    if (!link) return;
+    const why = linkVerdict(link.href, link.download);
     if (why) cancel(e, 'clicksBlocked', 'click blocked', why);
   };
   w.addEventListener('click', onClick, true);
   w.addEventListener('auxclick', onClick, true);
   w.addEventListener('submit', (e) => {
     if (!state.enabled || !e.target) return;
-    const why = linkVerdict(e.target.action || location.href, false);
+    const action = e.target.getAttribute ? e.target.getAttribute('action') : e.target.action;
+    if (!action) return;  // posts back to this page
+    const why = linkVerdict(e.target.action || action, false);
     if (why) cancel(e, 'clicksBlocked', 'form post blocked', why);
   }, true);
 
   // ---- navigations the page starts itself (redirect chains, location.href = ..., downloads), where supported ----
   if (w.navigation && w.navigation.addEventListener) {
     w.navigation.addEventListener('navigate', (e) => {
-      if (!state.enabled || !e.cancelable) return;
+      if (!state.enabled || !e.cancelable || (e.destination && e.destination.sameDocument)) return;
       const why = e.downloadRequest != null
         ? `download ${e.downloadRequest || 'file'}`
         : linkVerdict(e.destination && e.destination.url, false);
@@ -91,104 +151,125 @@
     });
   }
 
-  // ---- everything below replaces built-in functions, so it stays off YouTube -------------------------------------
+  // ---- everything below replaces built-in functions, so it stays off YouTube; each passes through after off() ----
+  const replace = (obj, name, make) => {
+    if (!obj || typeof obj[name] !== 'function') return;
+    const real = obj[name];
+    const fake = make(real);
+    try {
+      obj[name] = function (...args) { return state.enabled ? fake.apply(this, args) : real.apply(this, args); };
+    } catch { /* a read-only built-in stays as it is */ }
+  };
   if (!isYouTube) {
-    const realOpen = w.open;
-    w.open = function (url, ...rest) {
-      const u = toURL(url === undefined ? 'about:blank' : url);
-      if (!state.enabled || (u && u.origin === location.origin)) return realOpen.call(this, url, ...rest);
+    replace(w, 'open', (real) => function (url, target, ...rest) {
+      const t = String(target || '').toLowerCase();
+      if (t === '_self' || t === '_top' || t === '_parent') {
+        const why = url ? linkVerdict(url, false) : '';
+        if (!why) return real.call(this, url, target, ...rest);
+        state.navigationsBlocked++;
+        note('navigation blocked', why);
+        return null;
+      }
+      const u = toURL(url === undefined || url === '' ? 'about:blank' : url);
+      const clicked = Boolean(navigator.userActivation && navigator.userActivation.isActive);
+      const blank = !u || u.href === 'about:blank';
+      if ((u && u.origin === location.origin) || (blank && clicked)) return real.call(this, url, target, ...rest);
+      if (u && !blank && clicked && !linkVerdict(u.href, false)) return real.call(this, url, target, ...rest);
       state.popupsBlocked++;
-      note('pop-up blocked', url);
+      note('pop-up blocked', url === undefined ? '(no address)' : url);
       return null;
-    };
+    });
 
     // Dialogs that would hang an automated session.
-    const answer = (kind, value) => function (msg) {
+    const answer = (kind, value) => () => function (msg) {
       state.dialogsAnswered++;
       note(kind, msg === undefined ? '' : msg);
       return value;
     };
-    w.alert = answer('alert', undefined);
-    w.confirm = answer('confirm (answered Cancel)', false);
-    w.prompt = answer('prompt (answered Cancel)', null);
-    w.print = answer('print', undefined);
-    w.addEventListener('beforeunload', (e) => {
-      if (state.enabled) e.stopImmediatePropagation();
-    }, true);
+    replace(w, 'alert', answer('alert', undefined));
+    replace(w, 'confirm', answer('confirm (answered Cancel)', false));
+    replace(w, 'prompt', answer('prompt (answered Cancel)', null));
+    replace(w, 'print', answer('print', undefined));
+    // "Leave site?": the page's own beforeunload work still runs (a draft gets saved); only the dialog is dropped.
+    const BUE = w.BeforeUnloadEvent && w.BeforeUnloadEvent.prototype;
+    if (BUE) {
+      replace(BUE, 'preventDefault', () => function () { note('dialog', 'Leave site? (dropped)'); });
+      const desc = Object.getOwnPropertyDescriptor(BUE, 'returnValue');
+      if (desc && desc.set) {
+        try {
+          Object.defineProperty(BUE, 'returnValue', {
+            configurable: true, get: desc.get, set(v) { if (!state.enabled) desc.set.call(this, v); },
+          });
+        } catch { /* left as it is */ }
+      }
+    }
 
     // Permission prompts, clipboard writes (the "paste this into Terminal" lure), fullscreen and keyboard traps.
     const deny = (what) => { state.permissionsDenied++; note('denied', what); };
-    const refused = (what) => () => { deny(what); return Promise.reject(new DOMException(`${what} denied by browser-shield`, 'NotAllowedError')); };
-    if (w.Notification) {
-      w.Notification.requestPermission = () => { deny('notifications'); return Promise.resolve('denied'); };
-    }
-    if (navigator.geolocation) {
-      const refuse = (ok, fail) => { deny('location'); if (fail) setTimeout(() => fail({ code: 1, message: 'denied by browser-shield' })); return 0; };
-      navigator.geolocation.getCurrentPosition = refuse;
-      navigator.geolocation.watchPosition = refuse;
-    }
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia = refused('camera/microphone');
-    }
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText = refused('clipboard write');
-      navigator.clipboard.write = refused('clipboard write');
-    }
-    if (document.execCommand) {
-      const realExec = document.execCommand.bind(document);
-      document.execCommand = (cmd, ...rest) => {
-        if (state.enabled && /^(copy|cut)$/i.test(String(cmd))) { deny('clipboard write'); return false; }
-        return realExec(cmd, ...rest);
-      };
-    }
-    if (navigator.registerProtocolHandler) navigator.registerProtocolHandler = () => deny('protocol handler');
+    const refused = (what) => () => function () {
+      deny(what);
+      return Promise.reject(new DOMException(`${what} denied by browser-shield`, 'NotAllowedError'));
+    };
+    replace(w.Notification, 'requestPermission', () => function (cb) {
+      deny('notifications');
+      if (typeof cb === 'function') setTimeout(() => cb('denied'));
+      return Promise.resolve('denied');
+    });
+    const geoError = { code: 1, message: 'denied by browser-shield', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };
+    const refuseGeo = () => function (ok, fail) { deny('location'); if (fail) setTimeout(() => fail(geoError)); return 0; };
+    replace(navigator.geolocation, 'getCurrentPosition', refuseGeo);
+    replace(navigator.geolocation, 'watchPosition', refuseGeo);
+    replace(navigator.mediaDevices, 'getUserMedia', refused('camera/microphone'));
+    replace(navigator.clipboard, 'writeText', refused('clipboard write'));
+    replace(navigator.clipboard, 'write', refused('clipboard write'));
+    replace(document, 'execCommand', (real) => function (cmd, ...rest) {
+      if (/^(copy|cut)$/i.test(String(cmd))) { deny('clipboard write'); return false; }
+      return real.call(this, cmd, ...rest);
+    });
+    replace(navigator, 'registerProtocolHandler', () => function () { deny('protocol handler'); });
     if (w.Element && w.Element.prototype) {
-      w.Element.prototype.requestFullscreen = refused('fullscreen');
-      w.Element.prototype.requestPointerLock = () => deny('pointer lock');
+      replace(w.Element.prototype, 'requestFullscreen', refused('fullscreen'));
+      replace(w.Element.prototype, 'requestPointerLock', refused('pointer lock'));
     }
-    if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock = refused('keyboard lock');
+    replace(navigator.keyboard, 'lock', refused('keyboard lock'));
 
     // Requests to ad networks.
-    const realFetch = w.fetch;
-    w.fetch = function (input, init) {
-      const url = typeof input === 'string' ? input : input && input.url;
-      const u = url && toURL(url);
-      if (state.enabled && u && listed(u.hostname)) {
+    const urlOf = (input) => (input && typeof input === 'object' && 'url' in input ? input.url : input == null ? '' : String(input));
+    replace(w, 'fetch', (real) => function (input, init) {
+      const u = toURL(urlOf(input));
+      if (u && listed(u.hostname)) {
         state.requestsBlocked++;
         note('request blocked', u.hostname);
         return Promise.reject(new TypeError('Failed to fetch'));
       }
-      return realFetch.apply(this, arguments);
-    };
-    const realXOpen = XMLHttpRequest.prototype.open;
-    const realXSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+      return real.call(this, input, init);
+    });
+    replace(XMLHttpRequest.prototype, 'open', (real) => function (method, url, ...rest) {
       const u = toURL(url);
       this.__browserShieldBlocked = Boolean(u && listed(u.hostname));
-      return realXOpen.call(this, method, url, ...rest);
-    };
-    XMLHttpRequest.prototype.send = function (...args) {
-      if (state.enabled && this.__browserShieldBlocked) {
+      return real.call(this, method, url, ...rest);
+    });
+    replace(XMLHttpRequest.prototype, 'send', (real) => function (...args) {
+      if (this.__browserShieldBlocked) {
         state.requestsBlocked++;
         note('request blocked', 'XMLHttpRequest');
         return this.abort();
       }
-      return realXSend.apply(this, args);
-    };
-    if (navigator.sendBeacon) {
-      const realBeacon = navigator.sendBeacon.bind(navigator);
-      navigator.sendBeacon = (url, data) => {
-        const u = toURL(url);
-        if (state.enabled && u && listed(u.hostname)) { state.requestsBlocked++; return true; }
-        return realBeacon(url, data);
-      };
-    }
+      return real.apply(this, args);
+    });
+    replace(navigator, 'sendBeacon', (real) => function (url, data) {
+      const u = toURL(url);
+      if (u && listed(u.hostname)) { state.requestsBlocked++; return true; }
+      return real.call(this, url, data);
+    });
   }
 
   // ---- ad slots out of sight (and out of reach of a stray click) ----------------------------------------------------
+  // Fandom's (the wikis the scout and study agents read): its own <fandom-ad> element and wrappers, measured 2026-10-26.
   const GENERIC_SLOTS = [
     'ins.adsbygoogle', 'iframe[src*="doubleclick.net"]', 'iframe[src*="googlesyndication.com"]',
     'iframe[id^="google_ads_iframe"]', 'div[id^="div-gpt-ad"]', 'div[id^="taboola-"]', '.OUTBRAIN',
+    'fandom-ad', '.fandom-ad-wrapper', '.fandom-ad-label', 'div[class^="top_leaderboard-odyssey-wrapper"]',
   ];
   // EasyList's youtube.com hiding rules and AdGuard's, as of 2026-10-26. Not #player-ads: uBlock Origin deliberately
   // un-hides it. The in-player ad module stays visible; the skipper deals with it.
@@ -213,18 +294,31 @@
   // clip in the same <video> while #movie_player has `ad-showing`; seeking the clip to its end cleared a 135 s
   // pre-roll and a 15 s + 30 s mid-roll pod in under 2 s. Under server-stitched ads (debug_info "SSAP, AD") the video
   // holds ad and content as one timeline, so seeking the <video> would skip the whole video: there the player's own
-  // seekTo past the ad's progress is used instead (uBlock Origin's approach).
+  // seekTo is used, and only while the ad's progress and the video's clock agree (a pre-roll); what getProgressState
+  // reports during a stitched mid-roll is unmeasured, so such an ad is muted and left to end.
   let inAd = false;
   let mutedBefore = false;
   let lastAd = '';
+  let waitingNoted = '';
   const SIGNS = [
     ['ytd-enforcement-message-view-model', 'ad-blocker notice'],
-    ['a[href*="support.google.com/youtube/answer/3037019"]', '"Experiencing interruptions?" link'],
+    [['#movie_player', 'ytd-popup-container', 'tp-yt-paper-dialog', '#error-screen', 'yt-playability-error-supported-renderers']
+      .map((c) => `${c} a[href*="support.google.com/youtube/answer/3037019"]`).join(', '), '"Experiencing interruptions?" link'],
   ];
   const call = (o, name) => { try { return o && typeof o[name] === 'function' ? o[name]() : undefined; } catch { return undefined; } };
+  const playerVideo = () => {
+    const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    return [player, player && (player.querySelector('video.html5-main-video') || player.querySelector('video'))];
+  };
+  const standDown = () => {
+    const [, video] = playerVideo();
+    if (inAd && video) video.muted = mutedBefore;
+    inAd = false;
+  };
   const watchEnforcement = () => {
     for (const [sel, what] of SIGNS) {
       if (document.querySelector(sel)) {
+        standDown();
         state.enforcement = true;
         state.enforcementSign = what;
         note('stopped', `YouTube shows its ${what}; the shield stands down and leaves it in place`);
@@ -235,37 +329,40 @@
   };
   const tick = () => {
     if (!state.enabled || !isYouTube || state.enforcement || watchEnforcement()) return;
-    const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+    const [player, video] = playerVideo();
     if (!player) return;
-    const video = player.querySelector('video.html5-main-video') || player.querySelector('video');
     const mode = String((call(player, 'getStatsForNerds') || {}).debug_info || '');
     const ssap = mode.startsWith('SSAP, AD');
     const showing = player.classList.contains('ad-showing') || ssap;
-    if (showing && !inAd) { inAd = true; mutedBefore = video ? video.muted : false; }
     if (!showing) {
-      if (inAd && video) video.muted = mutedBefore;
-      inAd = false;
+      standDown();
       return;
     }
-    if (video) video.muted = true;
-    if (ssap) {
+    const begin = () => { if (!inAd) { inAd = true; mutedBefore = video ? video.muted : false; } if (video) video.muted = true; };
+    if (mode.startsWith('SSAP')) {
       const p = call(player, 'getProgressState');
-      if (p && p.duration > 0 && p.current < p.duration - 0.25 && typeof player.seekTo === 'function') {
+      begin();
+      if (p && p.duration > 0 && video && Math.abs(p.current - video.currentTime) < 0.5 && p.current < p.duration - 0.25
+          && typeof player.seekTo === 'function') {
         const key = `ssap ${Math.round(p.duration)}`;
         if (key !== lastAd) { lastAd = key; state.adsSkipped++; note('ad skipped', `${Math.round(p.duration)} s (stitched)`); }
         player.seekTo(p.duration);
+      } else if (waitingNoted !== mode) {
+        waitingNoted = mode;
+        note('ad muted', 'a stitched ad whose position is not the video clock: left to end');
       }
       return;
     }
     if (!video) return;
     const d = video.duration;
     const length = Number(((call(player, 'getPlayerResponse') || {}).videoDetails || {}).lengthSeconds) || 0;
-    if (length && d >= length - 1) {
-      // An "ad" clip as long as the video itself is not an ad clip: never seek it.
-      const skip = player.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button');
+    const skip = player.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button');
+    if (!length || Math.abs(d - length) <= 1.5) {
+      // No length to compare with, or a clip as long as the video itself: it may be the video. Never seek it.
       if (skip) skip.click();
       return;
     }
+    begin();
     if (Number.isFinite(d) && d > 0 && video.currentTime < d - 0.25) {
       const key = `${d.toFixed(2)}@${video.src}`;
       if (key !== lastAd) { lastAd = key; state.adsSkipped++; note('ad skipped', `${Math.round(d)} s`); }
@@ -274,8 +371,8 @@
   };
   let watched = null;
   const watch = () => {
-    const player = document.getElementById('movie_player');
-    if (player && player !== watched) {
+    const [player] = playerVideo();
+    if (player && player !== watched && player.id === 'movie_player') {
       watched = player;
       new MutationObserver(tick).observe(player, { attributes: true, attributeFilter: ['class'] });
     }
@@ -293,7 +390,7 @@
   }
 
   const youtubeStatus = () => {
-    const player = document.getElementById('movie_player');
+    const [player] = playerVideo();
     const stats = call(player, 'getStatsForNerds') || {};
     const playability = ((call(player, 'getPlayerResponse') || {}).playabilityStatus || {});
     return {
@@ -307,10 +404,11 @@
     enforcement: state.enforcement, enforcementSign: state.enforcementSign || undefined, adsSkipped: state.adsSkipped,
     clicksBlocked: state.clicksBlocked, navigationsBlocked: state.navigationsBlocked, popupsBlocked: state.popupsBlocked,
     requestsBlocked: state.requestsBlocked, dialogsAnswered: state.dialogsAnswered, permissionsDenied: state.permissionsDenied,
-  }, isYouTube ? youtubeStatus() : {}, { log: state.log.slice(-10) });
+  }, isYouTube ? youtubeStatus() : {}, prior ? { upgradedFrom: prior.status().version } : {}, { log: state.log.slice(-10) });
   w.__browserShield = {
     status,
-    off() { state.enabled = false; style.remove(); return status(); },
+    off() { standDown(); state.enabled = false; style.remove(); return status(); },
+    on() { state.enabled = true; (document.head || document.documentElement).appendChild(style); return status(); },
   };
   w.browserShield = status;
   note('active', location.href);

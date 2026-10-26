@@ -1,0 +1,92 @@
+# Decisions
+
+## Backlog: alternatives worth trying later
+
+- **A Claude Code mod that runs the page script after every navigation by itself** (2026-10-26). Mods can wrap a
+  tool call and call another tool (`$.tool.call`, desktop Code tab since 2.1.286), which would remove the one step the
+  agent can still forget. Revisit hook: the `plugin-authoring` skill; the mod calls `javascript_tool` with
+  `browserShield()` after `navigate` resolves on a YouTube host, and `policy.needs_shield_reminder` becomes its test.
+- **uBlock Origin Lite in the user's own Chrome for Claude in Chrome sessions** (2026-10-26). Claude in Chrome opens
+  ordinary tabs in the user's profile, so an MV3 blocker there filters them at the network layer, which no page script
+  can. Revisit hook: nothing in this repo changes; the guard keeps judging Claude's own calls.
+- **Frame grabs from a downloaded copy (yt-dlp + ffmpeg) instead of the watch page** (2026-10-26). No ads, exact
+  frames, no pane. Each download needs the user's go-ahead and YouTube's terms forbid downloading. Revisit hook:
+  `roblox-games/.claude/skills/scout/frame.js` would be replaced by a script that reads `-ss <t> -frames:v 1`.
+- **`onFailure: "block"` on the hooks** (2026-10-26) once every Claude Code on this Mac is 2.1.295 or later (the
+  desktop runs 2.1.295; the terminal CLI was 2.1.288, which may reject the key). Then a timeout or a crash outside
+  the guard's own `try` also refuses the call. Revisit hook: the two hook entries in `~/.claude/settings.json`.
+- **A weekly launchd job running `scripts/update_lists.py`** (2026-10-26), once the user has approved the downloads.
+  Phishing domains live for days. Revisit hook: the script already keeps the last good copy and exits 1 on any
+  failure; the job needs absolute paths and a pinned `HOME`.
+
+## 2026-10-26: where Claude's ad and harm blocking can live
+
+The Browser pane is Electron with no extension support and no ad-blocking setting (feature request
+anthropics/claude-code#104030); the only per-host block list is for third-party-provider deployments.
+
+- **A PreToolUse/PostToolUse hook on Claude's own tool calls plus a page script Claude runs after each load**: chosen.
+  The hook is the security boundary (it sees every URL, keystroke, form value and script before it runs); the page
+  script handles what only the page can see (ads playing, clicks, pop-ups, dialogs).
+- **A hosts file, DNS filter or system proxy**: rejected: it changes the Mac's network settings for every app, which
+  Claude must not do, and it cannot remove YouTube ads (they come from YouTube's own hosts).
+- **An `mcp_tool` hook calling `javascript_tool` after `navigate`**: rejected: the pane is a host (SDK) server that
+  the desktop lists in `deniedMcpServers`; an `mcp_tool` hook needs a "configured" server.
+- **A mod**, **uBlock Origin Lite in Chrome**, **yt-dlp frame grabs**: deferred, see the backlog.
+
+## 2026-10-26: how the page script deals with YouTube's in-stream ads
+
+Measured in the pane: YouTube inserted ads client-side (`getStatsForNerds().debug_info` begins `USDAI`), each ad its
+own clip in the shared `<video>` while `#movie_player` has `ad-showing`.
+
+- **Mute the ad and seek the clip to its end; under server-stitched ads (`SSAP, AD`) use the player's
+  `seekTo(getProgressState().duration)`; never seek a clip as long as the video**: chosen. Measured: a 135 s
+  pre-roll, a 15 s + 30 s mid-roll pod and two more pre-roll pods each cleared in under 2 s.
+- **Prune `adPlacements`/`adSlots` from player responses or wrap `fetch`/`JSON.parse`** (uBlock Origin's approach):
+  rejected: a script injected after load is too late for the first video, YouTube captures native functions in a
+  sandboxed iframe and reports tampering (`onAbnormalityDetected`), and a 2026-10-26 uAssets report ties prototype
+  changes to shadowbanned comments. On YouTube the script replaces no built-in function at all.
+- **Wait the ads out** (the scout agent's old rule, "never block or speed them"): rejected at the user's request.
+- **Open `youtube-nocookie.com/embed/<id>` instead**: rejected: embeds still carry ads, and a top-level navigation
+  sends no Referer, which YouTube answers with Error 153.
+- **On the ad-blocker notice or the "Experiencing interruptions?" link the script stands down for good and never
+  hides them**; the guard refuses any script that would. Evading YouTube's detection is out of scope.
+
+## 2026-10-26: what the guard refuses, what it asks about
+
+- **Deny** what is harmful whatever the context: ad, malware and phishing hosts; schemes other than http(s) (an app
+  launch, `javascript:`, `data:`); URLs a browser would read differently from the guard; secrets and card numbers in
+  URLs, keystrokes, form values and scripts; remote file shares; scripts that hide YouTube's notice.
+- **Ask** where the user may well want it: downloads, local files, the local network and bare public IPs, payment
+  and account pages, credentials before the host, file uploads, and shell commands shaped like a "paste this into
+  Terminal" lure. Claude's own rules already need the user's go-ahead for downloads and payments; "ask" turns that
+  into a prompt the user cannot miss.
+- **Rejected: deny everything risky.** Downloads, local previews and `curl | sh` installers are legitimate often
+  enough that a refusal would push work around the guard.
+
+## 2026-10-26: what happens when the guard itself fails
+
+- **An error while judging a known call refuses that call and names the error**: chosen. Failing open would make
+  any input that crashes the parser (`https://x]@evil.com/` crashes `urllib.parse`) a way past the guard.
+- **Unreadable hook input lets the call through with a `systemMessage`**: no web page controls Claude Code's own
+  JSON, so there is nothing to defend against there, and refusing would lock every browser call on a host bug.
+- **`onFailure: "block"`**: deferred (backlog): not every Claude Code on this Mac supports it.
+
+## 2026-10-26: which lists, and who wins
+
+- **Curated `lists/ad-hosts.txt` beats `lists/allow.txt`, which beats the downloaded lists.** Our own ad list keeps
+  `adservice.google.com` blocked under an allowed `google.com`; a false positive in a downloaded list can never cut
+  Claude off from YouTube, GitHub or Roblox.
+- **Downloaded: HaGeZi TIF mini, malware-filter's URLhaus hosts, Phishing Army, Peter Lowe**: chosen. Small
+  (about 7 MB together), refreshed daily or faster, none lists a host YouTube needs.
+- **URLhaus's own host file**: rejected: it now answers 410 and needs an account key.
+- **HaGeZi Pro, OISD, AdGuard DNS for ad-click hosts**: rejected: they allow `googleadservices.com` on purpose
+  (Google Shopping links), which is exactly the redirect an ad click goes through.
+- **Never committed**: the lists are GPL or unlicensed; they are fetched into the git-ignored `cache/`.
+
+## 2026-10-26: how the page script reaches the page
+
+- **`browserShield()` swapped for the file by the PreToolUse hook (`updatedInput`, no permission decision), plus a
+  PostToolUse note after a YouTube page loads without it**: chosen. Verified live: the rewrite applies to single
+  calls and to `browser_batch` items without auto-approving anything.
+- **The agent pastes the 13 KB file into each call**: rejected: a long transcription invites a silent copy error,
+  and the file would drift between copies.

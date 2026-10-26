@@ -4,6 +4,7 @@ browsers follow): every vector in url_vectors.json is parsed by both, and they m
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import unittest
@@ -15,9 +16,8 @@ HERE = Path(__file__).resolve().parent
 VECTORS = json.loads((HERE / "url_vectors.json").read_text(encoding="utf-8"))
 # Inputs Node accepts and we refuse on purpose (fail closed): an empty label is not a host any list could name.
 WE_REFUSE = {"https://a..b/", "https://evil.com\uff0e\uff0e/"}
-# Inputs Node refuses and we read as a host anyway (NFKC maps U+2024 ONE DOT LEADER to "."): the reading is checked,
-# never trusted, and a browser that refuses the URL goes nowhere.
-WE_READ_MORE = {"https://evil\u2024com/": ["https", "evil.com"]}
+# Inputs Node refuses and we read as a host anyway (none since the UTS 46 table; keep the mechanism for the next one).
+WE_READ_MORE: dict = {}
 
 NODE_SCRIPT = """
 const v = JSON.parse(require('fs').readFileSync(0, 'utf8'));
@@ -59,6 +59,51 @@ class AgreesWithWhatwg(unittest.TestCase):
                 self.assertEqual(mine, expected)
                 compared += 1
         self.assertGreaterEqual(compared, 55)
+
+
+SWEEP_SCRIPT = """
+const out = {};
+for (let cp = 0x80; cp <= 0x10ffff; cp++) {
+  if (cp >= 0xd800 && cp <= 0xdfff) continue;
+  try { out[cp] = new URL('https://x' + String.fromCodePoint(cp) + 'y.example/').hostname; } catch { out[cp] = null; }
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@unittest.skipIf(os.environ.get("BROWSER_SHIELD_SKIP_SWEEP") == "1", "mutation run of a file the sweep cannot see")
+class EveryCodePoint(unittest.TestCase):
+    def test_hosts_with_any_code_point_match_node(self):
+        # The browser maps, drops or refuses each non-ASCII code point (UTS 46). A character the guard read
+        # differently would be a way to reach a listed host unchecked: x<U+180F>y.example *is* xy.example.
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "node is the oracle for this test")
+        out = subprocess.run([node, "-e", SWEEP_SCRIPT], capture_output=True, text=True, check=True, timeout=120)
+        oracle = json.loads(out.stdout)
+        self.assertGreater(len(oracle), 1_000_000)
+        wrong, refused_more, read_more = [], 0, 0
+        for cp_text, expected in oracle.items():
+            try:
+                mine = urls.parse(f"https://x{chr(int(cp_text))}y.example/").host
+            except urls.UnreadableURL:
+                mine = None
+            if mine == expected:
+                continue
+            if mine is None:
+                refused_more += 1  # the guard refuses a host the browser reaches: safe, but it costs the user
+            elif expected is None:
+                read_more += 1  # the browser refuses (bidi rule next to Latin letters): it goes nowhere
+            else:
+                wrong.append((f"U+{int(cp_text):04X}", expected, mine))  # two different hosts: a way past the guard
+        self.assertEqual(wrong[:10], [], f"{len(wrong)} code points read as a different host than a browser's")
+        self.assertLess(refused_more, 50, "the guard refuses many hosts browsers accept")
+        self.assertLess(read_more, 5000, "far more refusals in the browser than the bidi rule explains")
+
+    def test_committed_table_is_what_node_produces(self):
+        node = shutil.which("node")
+        gen = HERE.parent / "scripts" / "gen_uts46.js"
+        run = subprocess.run([node, str(gen), "--check"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(run.returncode, 0, run.stderr)
 
 
 class Readings(unittest.TestCase):

@@ -107,7 +107,13 @@ class Lists:
             for d in read_list(lists_dir / name):
                 self.block.setdefault(d, name)
         self.ask = read_list(lists_dir / "ask-hosts.txt")
+        self.extensions = {
+            line.split("#", 1)[0].strip().lower()
+            for line in (lists_dir / "extensions.local.txt").read_text(encoding="utf-8").splitlines()
+            if line.split("#", 1)[0].strip()
+        } if (lists_dir / "extensions.local.txt").exists() else set()
         self.index = index if index.exists() else None
+        self.index_error = ""
 
     def asked_by(self, host: str) -> Optional[tuple[str, str]]:
         """(matching domain, list name) when host is a payment or account host the user decides about."""
@@ -133,12 +139,17 @@ class Lists:
             return None
         import sqlite3
 
-        con = sqlite3.connect(f"file:{self.index}?mode=ro", uri=True)
         try:
-            marks = ",".join("?" * len(suffixes))
-            rows = dict(con.execute(f"SELECT d, src FROM domains WHERE d IN ({marks})", suffixes).fetchall())
-        finally:
-            con.close()
+            con = sqlite3.connect(f"file:{self.index}?mode=ro", uri=True)
+            try:
+                marks = ",".join("?" * len(suffixes))
+                rows = dict(con.execute(f"SELECT d, src FROM domains WHERE d IN ({marks})", suffixes).fetchall())
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            # A damaged index must not lock every navigation: the curated lists still apply, and the hook says so.
+            self.index_error = f"{type(exc).__name__}: {exc}"
+            return None
         for s in suffixes:
             if s in rows:
                 return s, rows[s]
