@@ -65,3 +65,24 @@ imports `inspect`) cost about 25 ms. Replacing dataclasses with namedtuples, imp
 ordinary shell commands before loading the policy brought it to 84 ms for Bash and 125 ms for browser calls.
 
 **Takeaway:** profile a hook with `python -X importtime` and give the common case an exit before the imports.
+
+### Replay real history to measure a guard's false positives
+
+A guard's cost is the legitimate work it stops, and the best sample of legitimate work is what was actually done.
+
+**Why it came up:** replaying 122,697 tool calls from 2,816 Claude Code transcripts through the policy found 40
+false positives on real work (Claude opening its own HTML previews, a WebFetch of a `.sh` file, a test string
+containing `curl|bash`) that no hand-written test had imagined; after the fixes the same replay stops one.
+
+**Takeaway:** before shipping a filter, run it over the real traffic it will see and read every hit by rule.
+
+### A live guard also judges the tools that test it
+
+Once a hook is installed for every session, the reviewers and test scripts working on it are inside its scope.
+
+**Why it came up:** reviewer agents probing shell lures put `curl … | sh` on their own Bash command lines, and the
+live guard asked the user about each one, which would have stalled them; the review was restarted with the probes
+in files. Later, Bash heredocs that edited the lure tests tripped it the same way.
+
+**Takeaway:** keep attack strings in files (or build them from parts) whenever the thing under test is watching
+the command line.

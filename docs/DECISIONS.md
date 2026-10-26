@@ -90,3 +90,32 @@ own clip in the shared `<video>` while `#movie_player` has `ad-showing`.
   calls and to `browser_batch` items without auto-approving anything.
 - **The agent pastes the 13 KB file into each call**: rejected: a long transcription invites a silent copy error,
   and the file would drift between copies.
+
+## 2026-10-26: Unicode hosts after the code-point sweep
+
+A sweep over all 1.1 million code points found 251 that a browser maps to plain ASCII (variation selectors,
+U+180F, U+2064, U+1E9E) while Python's idna codec (Unicode 3.2 tables) kept them: `x<U+180F>y.example` *is*
+`xy.example` to the browser, so a listed host could be reached unchecked.
+
+- **A UTS 46 table generated from Node's own parser (ICU 78.2, Unicode 17), committed, with a test that regenerates
+  it and one that sweeps every code point against Node**: chosen. 89 KB, loaded only for non-ASCII hosts.
+- **Unicode's `IdnaMappingTable.txt`**: rejected: a download needing the user's go-ahead, and Node is the oracle
+  the tests already trust, so the table cannot disagree with the test that checks it.
+- **Refuse or ask on every non-ASCII host**: rejected: it would stop every internationalised domain to protect
+  against a mapping we can compute exactly.
+
+## 2026-10-26: what the replay of 122,697 real tool calls changed
+
+- **Files inside the session's project folder and scratchpad open without asking** (from the hook input's `cwd` and
+  `scratchpad_dir`, symlinks resolved); anything else on the Mac still asks. 27 of the 40 false positives were
+  Claude opening its own generated HTML.
+- **WebFetch skips the download and payment-page asks**: it returns text to the model, holds no session and saves
+  nothing; blocklists, schemes and secrets still apply.
+- **Chrome extension pages ask instead of being refused; ids in git-ignored `lists/extensions.local.txt` open**
+  (the user's own extension under test). Rejected: keep refusing them (the verifier found Claude in Chrome does not
+  open them anyway, but the user's own extension testing ran through them).
+- **Shell lures need the shell to end the command (or take options)**: `echo "curl|bash"` and test strings are text.
+  Revisit hook: `policy.SHELL_LURES`; a quoted lure inside a heredoc still asks (rare, and the safe direction).
+- **The page script treats a site's own pages named like scripts as pages** (`github.com/x/acme.sh`), and only
+  installers and executables as downloads from the same site; another site's archives and scripts stay downloads.
+  Rejected: same-origin `blob:` downloads allowed (the verifier noted that is how pages smuggle a payload).

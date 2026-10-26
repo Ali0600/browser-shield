@@ -330,6 +330,9 @@ test('PS-08: a site\'s own pages named like scripts are pages; same-document nav
   let cancelled = false;
   for (const fn of page.navListeners) fn({ cancelable: true, destination: { url: 'https://github.com/x/y/blob/main/a.sh?plain=1', sameDocument: true }, downloadRequest: null, preventDefault() { cancelled = true; } });
   assert.equal(cancelled, false);
+  // A page whose own address ends like an installer: moving to an anchor on it is not a download.
+  for (const fn of page.navListeners) fn({ cancelable: true, destination: { url: 'https://github.com/x/y/raw/main/setup.dmg#notes', sameDocument: true }, downloadRequest: null, preventDefault() { cancelled = true; } });
+  assert.equal(cancelled, false);
   let prevented = false;
   page.listeners.submit[0].fn({ target: { getAttribute: () => null, action: 'https://github.com/ohmyzsh/ohmyzsh/blob/master/oh-my-zsh.sh' }, preventDefault() { prevented = true; } });
   assert.equal(prevented, false);

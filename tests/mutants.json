@@ -28,10 +28,10 @@
   "expect": "test_vectors_match_node"
  },
  {
-  "id": "urls-no-wide-dots",
+  "id": "urls-uts46-unmapped",
   "file": "browser_shield/urls.py",
-  "old": "mapped = _DOTS.sub(\".\", unicodedata.normalize(\"NFKC\", domain)).lower()",
-  "new": "mapped = domain.lower()",
+  "old": "        out.append(mapped.get(cp, ch))",
+  "new": "        out.append(ch)",
   "expect": "test_vectors_match_node"
  },
  {
@@ -79,8 +79,8 @@
  {
   "id": "policy-batch-first-only",
   "file": "browser_shield/policy.py",
-  "old": "    for i, item in enumerate(actions):\n        if not isinstance(item, dict) or not isinstance(item.get(\"input\"), dict):\n            continue\n        _check_action(",
-  "new": "    for i, item in enumerate(actions[:1]):\n        if not isinstance(item, dict) or not isinstance(item.get(\"input\"), dict):\n            continue\n        _check_action(",
+  "old": "    for i, item in enumerate(actions):",
+  "new": "    for i, item in enumerate(actions[:1]):",
   "expect": "test_one_bad_item_denies_the_batch_and_names_it"
  },
  {
@@ -100,8 +100,8 @@
  {
   "id": "policy-typing-unchecked",
   "file": "browser_shield/policy.py",
-  "old": "    elif tool == \"computer\" and inp.get(\"action\") == \"type\":",
-  "new": "    elif tool == \"computer\" and inp.get(\"action\") == \"typed\":",
+  "old": "    elif tool == \"computer\" and inp.get(\"action\") in (\"type\", \"key\"):",
+  "new": "    elif tool == \"computer\" and inp.get(\"action\") in (\"key\",):",
   "expect": "test_typing_a_secret_is_denied"
  },
  {
@@ -170,8 +170,8 @@
  {
   "id": "guard-crash-not-caught",
   "file": "hooks/guard.py",
-  "old": "    except Exception as exc:  # unreadable hook input",
-  "new": "    except ZeroDivisionError as exc:  # unreadable hook input",
+  "old": "    except Exception as exc:\n        log({\"event\": \"error\", \"error\": type(exc).__name__})",
+  "new": "    except ZeroDivisionError as exc:\n        log({\"event\": \"error\", \"error\": type(exc).__name__})",
   "expect": "test_broken_input_lets_the_call_through_loudly"
  },
  {
@@ -191,8 +191,8 @@
  {
   "id": "shield-no-unmute",
   "file": "page/shield.js",
-  "old": "      if (inAd && video) video.muted = mutedBefore;",
-  "new": "      void mutedBefore;",
+  "old": "    if (inAd && video) video.muted = mutedBefore;",
+  "new": "    void mutedBefore;",
   "expect": "pre-roll is muted"
  },
  {
@@ -212,22 +212,22 @@
  {
   "id": "shield-popups-allowed",
   "file": "page/shield.js",
-  "old": "    if (!state.enabled || (u && u.origin === location.origin)) return realOpen.call(this, url, ...rest);",
-  "new": "    if (true) return realOpen.call(this, url, ...rest);",
+  "old": "      state.popupsBlocked++;\n      note('pop-up blocked'",
+  "new": "      return real.call(this, url, target, ...rest);\n      note('pop-up blocked'",
   "expect": "pop-ups are refused"
  },
  {
   "id": "shield-not-idempotent",
   "file": "page/shield.js",
-  "old": "  if (w.__browserShield) return w.__browserShield.status();",
-  "new": "",
+  "old": "    if ((s.version || 0) >= VERSION) {",
+  "new": "    if ((s.version || 0) > VERSION) {",
   "expect": "running it twice"
  },
  {
   "id": "shield-confirm-ok",
   "file": "page/shield.js",
-  "old": "  w.confirm = answer('confirm (answered Cancel)', false);",
-  "new": "  w.confirm = answer('confirm (answered Cancel)', true);",
+  "old": "    replace(w, 'confirm', answer('confirm (answered Cancel)', false));",
+  "new": "    replace(w, 'confirm', answer('confirm (answered Cancel)', true));",
   "expect": "dialogs, permissions"
  },
  {
@@ -364,24 +364,24 @@
   "expect": "test_vectors_match_node"
  },
  {
-  "id": "urls-joiners-ok",
+  "id": "urls-uts46-refusals-ignored",
   "file": "browser_shield/urls.py",
-  "old": "    if \"\\u200c\" in mapped or \"\\u200d\" in mapped:",
-  "new": "    if False:",
-  "expect": "test_vectors_match_node"
+  "old": "        if i >= 0 and cp <= ends[i]:",
+  "new": "        if False:",
+  "expect": "test_hosts_with_any_code_point_match_node"
  },
  {
-  "id": "urls-sharp-s-folded",
+  "id": "urls-nfc-skipped",
   "file": "browser_shield/urls.py",
-  "old": "            if \"ß\" in label or \"ς\" in label:",
-  "new": "            if False:",
-  "expect": "test_vectors_match_node"
+  "old": "    return unicodedata.normalize(\"NFC\", \"\".join(out))",
+  "new": "    return \"\".join(out)",
+  "expect": "test_hosts_with_any_code_point_match_node"
  },
  {
   "id": "leaks-no-env",
   "file": "browser_shield/leaks.py",
-  "old": "    for name, value in env_secrets(environ).items():",
-  "new": "    for name, value in {}.items():",
+  "old": "    for name, value in env_secrets(environ).items():\n        if value in text:",
+  "new": "    for name, value in {}.items():\n        if value in text:",
   "expect": "test_environment_secrets_are_refused_by_value"
  },
  {
@@ -408,15 +408,15 @@
  {
   "id": "shield-ssap-seeks-video",
   "file": "page/shield.js",
-  "old": "    if (ssap) {",
+  "old": "    if (mode.startsWith('SSAP')) {",
   "new": "    if (false) {",
   "expect": "server-stitched ad"
  },
  {
   "id": "shield-full-length-seek",
   "file": "page/shield.js",
-  "old": "    if (length && d >= length - 1) {",
-  "new": "    if (false) {",
+  "old": "    if (!length || Math.abs(d - length) <= 1.5) {",
+  "new": "    if (!length) {",
   "expect": "as long as the video"
  },
  {
@@ -443,15 +443,15 @@
  {
   "id": "shield-clipboard-open",
   "file": "page/shield.js",
-  "old": "      navigator.clipboard.writeText = refused('clipboard write');",
+  "old": "    replace(navigator.clipboard, 'writeText', refused('clipboard write'));\n",
   "new": "",
   "expect": "clipboard"
  },
  {
   "id": "shield-interruptions-ignored",
   "file": "page/shield.js",
-  "old": "    ['a[href*=\"support.google.com/youtube/answer/3037019\"]', '\"Experiencing interruptions?\" link'],",
-  "new": "",
+  "old": "      .map((c) => `${c} a[href*=\"support.google.com/youtube/answer/3037019\"]`).join(', '), '\"Experiencing interruptions?\" link'],",
+  "new": "      .map((c) => `${c} a[href*=\"nowhere.invalid/x\"]`).join(', '), '\"Experiencing interruptions?\" link'],",
   "expect": "Experiencing interruptions"
  },
  {
@@ -583,8 +583,8 @@
  {
   "id": "rf-jwt-quadratic",
   "file": "browser_shield/leaks.py",
-  "old": "        if \"eyJ\" not in token:\n            continue\n",
-  "new": "",
+  "old": "    jwts = _jwts(text) if \"eyJ\" in text else []",
+  "new": "    jwts = re.findall(r\"\\beyJ[A-Za-z0-9_\\-]{8,}\\.eyJ[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{8,}\", text)",
   "expect": "test_jwt_scan_is_linear"
  },
  {
