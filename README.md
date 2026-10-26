@@ -17,8 +17,8 @@ used to stall every visual review until it ran out. browser-shield works from th
   to ad-click, app-launch and download targets, refuses pop-ups nobody clicked for, answers dialogs, denies
   permission, clipboard and fullscreen requests, drops requests to ad networks, and hides ad slots (Fandom's
   included). Claude calls it with the text `browserShield()`; the hook swaps in the file.
-- **An autorun mod** (`hooks/autorun.ts`, optional): a Claude Code plugin hook that starts the page script by itself
-  after the pane or Chrome lands on YouTube, as a tool call of its own that the guard, your permission rules and auto
+- **An autorun mod** (`hooks/autorun.ts`, off; not loaded anywhere): a Claude Code plugin hook that starts the page
+  script by itself after the pane or Chrome lands on YouTube, as a tool call of its own that the guard, your permission rules and auto
   mode judge like any other.
 
 ## Install

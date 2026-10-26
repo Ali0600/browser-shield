@@ -121,6 +121,10 @@ mod (`hooks/autorun.ts`) now does it. Four forks, each measured in `claude plugi
 - **Layout.** A `mod/` folder reading `../page/shield.js`: rejected, a linked or copied plugin folder resolves `..`
   elsewhere. A copy of the page script inside the mod: rejected, two copies drift. The repo root as the plugin, reading
   `${$.plugin.root}/page/shield.js`: chosen.
+- **Whether it runs at all** (decided by the user, 2026-10-26). Leave it off: chosen. Agents keep running
+  `browserShield()` themselves after the guard's reminder (one tool call per YouTube page, measured working). Allowing
+  the pane's `javascript_tool` unasked so the mod runs in auto mode: deferred, see the backlog; the mod stays in the
+  repo, tested, and loads nowhere unless named with `--plugin-dir` or `CLAUDE_CODE_PLUGIN_DIRS`.
 
 ## 2026-10-26: Unicode hosts after the code-point sweep
 
