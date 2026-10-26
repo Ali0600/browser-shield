@@ -1,0 +1,25 @@
+# Ad networks and ad-click redirectors: the guard refuses to navigate to them and page/shield.js cancels clicks,
+# pop-ups and requests to them. page/shield.js carries the same list as AD_HOSTS; tests/test_lists.py pins the two.
+2mdn.net
+adnxs.com
+adsrvr.org
+adservice.google.com
+amazon-adsystem.com
+casalemedia.com
+criteo.com
+criteo.net
+doubleclick.net
+exoclick.com
+googleadservices.com
+googlesyndication.com
+googletagservices.com
+mgid.com
+moatads.com
+outbrain.com
+popads.net
+propellerads.com
+pubmatic.com
+revcontent.com
+rubiconproject.com
+taboola.com
+teads.tv

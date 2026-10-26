@@ -1,0 +1,247 @@
+[
+ {
+  "id": "urls-keep-tabs",
+  "file": "browser_shield/urls.py",
+  "old": "    return s.replace(\"\\t\", \"\").replace(\"\\n\", \"\").replace(\"\\r\", \"\")",
+  "new": "    return s",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-first-at",
+  "file": "browser_shield/urls.py",
+  "old": "authority = authority.rsplit(\"@\", 1)[1]",
+  "new": "authority = authority.split(\"@\", 1)[1]",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-backslash",
+  "file": "browser_shield/urls.py",
+  "old": "rest = rest.lstrip(\"/\\\\\")",
+  "new": "rest = rest.lstrip(\"/\")",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-no-percent-decode",
+  "file": "browser_shield/urls.py",
+  "old": "decoded = unquote_to_bytes(text).decode(\"utf-8\")",
+  "new": "decoded = text",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-no-wide-dots",
+  "file": "browser_shield/urls.py",
+  "old": "mapped = _DOTS.sub(\".\", unicodedata.normalize(\"NFKC\", domain)).lower()",
+  "new": "mapped = domain.lower()",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-octal-as-decimal",
+  "file": "browser_shield/urls.py",
+  "old": "        part, base = part[1:], 8",
+  "new": "        part, base = part[1:], 10",
+  "expect": "test_vectors_match_node"
+ },
+ {
+  "id": "urls-substring-suffix",
+  "file": "browser_shield/urls.py",
+  "old": "    return [\".\".join(labels[i:]) for i in range(len(labels))]",
+  "new": "    return [host[i:] for i in range(len(host))]",
+  "expect": "test_suffixes_stop_at_label_boundaries"
+ },
+ {
+  "id": "urls-no-default-scheme",
+  "file": "browser_shield/urls.py",
+  "old": "        return [f\"{default_scheme}://{s}\"]",
+  "new": "        return [s]",
+  "expect": "test_missing_scheme_defaults_to_https"
+ },
+ {
+  "id": "policy-javascript-ok",
+  "file": "browser_shield/policy.py",
+  "old": "SCHEMES_OK = {\"http\", \"https\"}",
+  "new": "SCHEMES_OK = {\"http\", \"https\", \"javascript\"}",
+  "expect": "test_dangerous_schemes"
+ },
+ {
+  "id": "policy-dmg-not-download",
+  "file": "browser_shield/policy.py",
+  "old": "    \"dmg\", \"pkg\",",
+  "new": "    \"pkg\",",
+  "expect": "test_downloads_ask_the_user"
+ },
+ {
+  "id": "policy-rank-inverted",
+  "file": "browser_shield/policy.py",
+  "old": "        if _RANK[decision] > _RANK[self.decision]:",
+  "new": "        if _RANK[decision] < _RANK[self.decision]:",
+  "expect": "test_deny_outranks_ask"
+ },
+ {
+  "id": "policy-batch-first-only",
+  "file": "browser_shield/policy.py",
+  "old": "    for i, item in enumerate(actions):\n        if not isinstance(item, dict) or not isinstance(item.get(\"input\"), dict):\n            continue\n        _check_action(",
+  "new": "    for i, item in enumerate(actions[:1]):\n        if not isinstance(item, dict) or not isinstance(item.get(\"input\"), dict):\n            continue\n        _check_action(",
+  "expect": "test_one_bad_item_denies_the_batch_and_names_it"
+ },
+ {
+  "id": "policy-script-nav-unchecked",
+  "file": "browser_shield/policy.py",
+  "old": "    for m in _JS_NAVIGATION.finditer(text):",
+  "new": "    for m in _JS_NAVIGATION.finditer(\"\"):",
+  "expect": "test_script_navigation_to_a_bad_host_is_denied"
+ },
+ {
+  "id": "policy-no-ad-paths",
+  "file": "browser_shield/policy.py",
+  "old": "    for host_rx, path_rx in AD_PATHS:",
+  "new": "    for host_rx, path_rx in []:",
+  "expect": "test_ad_click_paths"
+ },
+ {
+  "id": "policy-private-ip-public",
+  "file": "browser_shield/policy.py",
+  "old": "    return ip.is_private or ip.is_loopback or ip.is_link_local",
+  "new": "    return False",
+  "expect": "test_bare_public_ips_ask_private_ones_pass"
+ },
+ {
+  "id": "policy-typing-unchecked",
+  "file": "browser_shield/policy.py",
+  "old": "    elif tool == \"computer\" and inp.get(\"action\") == \"type\":",
+  "new": "    elif tool == \"computer\" and inp.get(\"action\") == \"typed\":",
+  "expect": "test_typing_a_secret_is_denied"
+ },
+ {
+  "id": "policy-url-secret-unchecked",
+  "file": "browser_shield/policy.py",
+  "old": "    for leak in leaks.find_leaks(urls.preprocess(raw)):",
+  "new": "    for leak in leaks.find_leaks(\"\"):",
+  "expect": "test_secrets_in_urls_are_denied"
+ },
+ {
+  "id": "policy-unreadable-allowed",
+  "file": "browser_shield/policy.py",
+  "old": "            v.raise_to(DENY, f\"{where}: a browser could read this URL differently",
+  "new": "            v.raise_to(ALLOW, f\"{where}: a browser could read this URL differently",
+  "expect": "test_unreadable_urls_fail_closed"
+ },
+ {
+  "id": "lists-allow-beats-curated",
+  "file": "browser_shield/lists.py",
+  "old": "        suffixes = urls.host_suffixes(host)\n        for s in suffixes:\n            if s in self.block:",
+  "new": "        suffixes = urls.host_suffixes(host)\n        for s in ([] if self.allowed(host) else suffixes):\n            if s in self.block:",
+  "expect": "test_curated_block_beats_the_allow_list"
+ },
+ {
+  "id": "lists-index-ignores-allow",
+  "file": "browser_shield/lists.py",
+  "old": "        if self.index is None or self.allowed(host):",
+  "new": "        if self.index is None:",
+  "expect": "test_allow_list_beats_a_downloaded_list"
+ },
+ {
+  "id": "lists-cosmetic-as-domain",
+  "file": "browser_shield/lists.py",
+  "old": "line = re.split(r\"\\s#\", line, 1)[0].strip()",
+  "new": "line = line.split(\"#\", 1)[0].strip()",
+  "expect": "test_rejects"
+ },
+ {
+  "id": "leaks-luhn-always",
+  "file": "browser_shield/leaks.py",
+  "old": "    return total % 10 == 0",
+  "new": "    return True",
+  "expect": "test_luhn_failures_are_not_cards"
+ },
+ {
+  "id": "leaks-test-cards-blocked",
+  "file": "browser_shield/leaks.py",
+  "old": "        if brand is None or (allow_test_cards and digits in TEST_CARDS):",
+  "new": "        if brand is None:",
+  "expect": "test_published_test_cards_pass"
+ },
+ {
+  "id": "leaks-any-brand",
+  "file": "browser_shield/leaks.py",
+  "old": "    if digits[0] == \"4\" and n in (13, 16, 19):",
+  "new": "    if n in (13, 16, 19):",
+  "expect": "test_long_ids_are_not_cards"
+ },
+ {
+  "id": "guard-rewrite-auto-allows",
+  "file": "hooks/guard.py",
+  "old": "        out[\"hookSpecificOutput\"] = {\"hookEventName\": \"PreToolUse\", \"updatedInput\": updated}",
+  "new": "        out[\"hookSpecificOutput\"] = {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"allow\", \"updatedInput\": updated}",
+  "expect": "test_rewrite_keeps_every_other_field"
+ },
+ {
+  "id": "guard-crash-not-caught",
+  "file": "hooks/guard.py",
+  "old": "    except Exception as exc:  # the guard must never take the browser down with it",
+  "new": "    except ZeroDivisionError as exc:  # the guard must never take the browser down with it",
+  "expect": "test_broken_input_lets_the_call_through_loudly"
+ },
+ {
+  "id": "shield-runs-on-localhost",
+  "file": "page/shield.js",
+  "old": "  if (/^(localhost|127(\\.\\d{1,3}){3}|\\[::1\\])$|\\.(localhost|test)$/.test(host) && !w.__browserShieldOnLocal) {",
+  "new": "  if (false) {",
+  "expect": "local dev hosts are left alone"
+ },
+ {
+  "id": "shield-no-seek",
+  "file": "page/shield.js",
+  "old": "      video.currentTime = Math.max(0, d - 0.1);",
+  "new": "      void d;",
+  "expect": "pre-roll is muted"
+ },
+ {
+  "id": "shield-no-unmute",
+  "file": "page/shield.js",
+  "old": "      if (inAd && video) video.muted = mutedBefore;",
+  "new": "      void mutedBefore;",
+  "expect": "pre-roll is muted"
+ },
+ {
+  "id": "shield-ignores-enforcement",
+  "file": "page/shield.js",
+  "old": "    if (document.querySelector(ENFORCEMENT)) {",
+  "new": "    if (false) {",
+  "expect": "enforcement notice"
+ },
+ {
+  "id": "shield-click-bubble",
+  "file": "page/shield.js",
+  "old": "  w.addEventListener('click', onClick, true);",
+  "new": "  w.addEventListener('click', onClick, false);",
+  "expect": "links are cancelled"
+ },
+ {
+  "id": "shield-popups-allowed",
+  "file": "page/shield.js",
+  "old": "    if (!state.enabled || (u && u.origin === location.origin)) return realOpen.call(this, url, ...rest);",
+  "new": "    if (true) return realOpen.call(this, url, ...rest);",
+  "expect": "pop-ups are refused"
+ },
+ {
+  "id": "shield-youtube-requests-blocked",
+  "file": "page/shield.js",
+  "old": "  if (!isYouTube) {\n    const realFetch",
+  "new": "  if (true) {\n    const realFetch",
+  "expect": "left alone on it"
+ },
+ {
+  "id": "shield-not-idempotent",
+  "file": "page/shield.js",
+  "old": "  if (w.__browserShield) return w.__browserShield.status();",
+  "new": "",
+  "expect": "running it twice"
+ },
+ {
+  "id": "shield-confirm-ok",
+  "file": "page/shield.js",
+  "old": "  w.confirm = answer('confirm (answered Cancel)', false);",
+  "new": "  w.confirm = answer('confirm (answered Cancel)', true);",
+  "expect": "dialogs and permission prompts"
+ }
+]
