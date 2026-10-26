@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -16,6 +17,8 @@ PYTHON = "/usr/bin/python3"
 
 
 STATE = Path(tempfile.mkdtemp(prefix="browser-shield-test-"))
+# test_review_fixes writes here after this module's own teardown has run, so the folder goes at interpreter exit.
+atexit.register(shutil.rmtree, STATE, True)
 LIVE_LOG = ROOT / "cache" / "guard.log"
 
 
