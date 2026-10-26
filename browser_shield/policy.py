@@ -1,4 +1,4 @@
-"""The guard's verdict on one browser tool call: allow, ask the user, or deny, with the reasons.
+"""The guard's verdict on one tool call: allow, ask the user, or deny, with the reasons.
 
 Pure functions over the tool name and its input, so every rule is testable without Claude Code running.
 """
@@ -6,10 +6,10 @@ Pure functions over the tool name and its input, so every rule is testable witho
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import parse_qs, unquote
 
 from . import leaks, urls
 from .lists import ROOT, Lists
@@ -20,9 +20,10 @@ SHIELD_CALL = "browserShield()"  # javascript_tool text the guard swaps for the 
 DENY, ASK, ALLOW = "deny", "ask", "allow"
 _RANK = {ALLOW: 0, ASK: 1, DENY: 2}
 
-# Hosts the browser may always reach, even when a downloaded list names them (a false positive there would break the
-# tool, not protect the user). Suffix match: "youtube.com" covers "www.youtube.com".
 SCHEMES_OK = {"http", "https"}
+# Tools that run a shell command line: Claude Code's Bash, and the desktop app's Terminal panel (the user's own
+# login shell, outside any sandbox).
+SHELL_TOOLS = {"Bash", "mcp__terminal__run_in_terminal"}
 DOWNLOAD_EXT = {
     "dmg", "pkg", "mpkg", "exe", "msi", "bat", "cmd", "scr", "ps1", "sh", "command", "tool", "scpt", "applescript",
     "workflow", "terminal", "jar", "deb", "rpm", "apk", "ipa", "iso", "img", "bin", "run", "appimage", "xpi", "crx",
@@ -33,25 +34,71 @@ AD_PATHS = [
     (re.compile(r"(^|\.)google\.[a-z.]+$"), re.compile(r"^/(aclk|pagead/)")),
     (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/pagead/")),
 ]
-_JS_NAVIGATION = re.compile(
-    r"""(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\s*\(|window\.open\s*\(|\.src\s*=)\s*(['"`])([^'"`\s]+)\1"""
+# Pages where one click spends money, grants an app access to an account, or changes how the account is secured.
+ASK_PATHS = [
+    (re.compile(r"^accounts\.google\.com$"), re.compile(r"^/(o/oauth2|signin/oauth)")),
+    (re.compile(r"^myaccount\.google\.com$"), re.compile(r"^/(security|signinoptions|permissions)")),
+    (re.compile(r"^github\.com$"), re.compile(r"^/(login/oauth/authorize|settings/(tokens|keys|security|applications))")),
+    (re.compile(r"(^|\.)roblox\.com$"), re.compile(r"^/(upgrades|premium|giftcards|redeem|transactions)", re.I)),
+]
+# Link wrappers whose real destination sits in a query parameter (a YouTube description link goes through
+# youtube.com/redirect?q=...). The destination is judged too.
+REDIRECTORS = [
+    (re.compile(r"(^|\.)google\.[a-z.]+$"), re.compile(r"^/url$"), ("q", "url")),
+    (re.compile(r"(^|\.)youtube\.com$"), re.compile(r"^/redirect$"), ("q",)),
+    (re.compile(r"^l[m]?\.facebook\.com$"), re.compile(r"^/l\.php$"), ("u",)),
+    (re.compile(r"^l\.instagram\.com$"), re.compile(r"^/$"), ("u",)),
+    (re.compile(r"^out\.reddit\.com$"), re.compile(r"^/"), ("url",)),
+    (re.compile(r"^steamcommunity\.com$"), re.compile(r"^/linkfilter/?$"), ("url", "u")),
+]
+_JS_SINK = re.compile(
+    r"""(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\s*\(|window\.open\s*\(|\.src\s*=|fetch\s*\("""
+    r"""|sendBeacon\s*\(|new\s+WebSocket\s*\(|new\s+EventSource\s*\(|import\s*\()\s*(['"`])([^'"`\s]+)\1"""
+)
+# Shell commands a "paste this into Terminal" lure (ClickFix) ends in. Each one asks the user; none is refused.
+SHELL_LURES = [
+    (re.compile(r"\b(curl|wget)\b[^|;&\n]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b"), "pipes a download straight into a shell"),
+    (re.compile(r"\b(ba|z)?sh\s+-c\s+[\"']?\$\(\s*(curl|wget)\b"), "runs a downloaded script"),
+    (re.compile(r"\bbase64\s+(-d|-D|--decode)\b[^\n]*\|\s*(ba|z)?sh\b"), "decodes and runs a hidden script"),
+    (re.compile(r"\bxattr\s+(-[a-z]*d[a-z]*\s+com\.apple\.quarantine|-[a-z]*c[a-z]*\b)"), "removes macOS's download quarantine"),
+    (re.compile(r"\bspctl\s+--master-disable\b"), "turns Gatekeeper off"),
+    (re.compile(r"\binstaller\s+-pkg\b"), "installs a package"),
+    (re.compile(r"\bhdiutil\s+attach\b"), "mounts a disk image"),
+]
+# A script that hides or dismisses YouTube's ad-blocker notice is evasion, not ad blocking: the shield stops there.
+_EVASION = re.compile(
+    r"(ytd-enforcement-message-view-model|tp-yt-iron-overlay-backdrop|enforcement-message|#dismiss-button)"
+    r"[^;]{0,120}?(\.(remove|click|replaceWith)\s*\(|removeChild|\.style\b|\.hidden\b|display\s*:\s*none)",
+    re.I | re.S,
+)
+INJECTION_PHRASES = re.compile(
+    r"(ignore|disregard|forget)\s+(all\s+|any\s+)?(the\s+)?(previous|prior|above|earlier)\s+instructions"
+    r"|if\s+you\s+are\s+an?\s+(ai|llm|language\s+model|assistant|agent|bot)\b"
+    r"|\[\s*system(\s+override)?\s*\]|<\|im_start\|>|\bnew\s+instructions\s*:"
+    r"|\b(ai|llm)\s+agents?\s+(must|should)\s+(now\s+)?(run|open|paste|click|send|type|download)",
+    re.I,
 )
 
 
-@dataclass
 class Verdict:
-    decision: str = ALLOW
-    reasons: list[str] = field(default_factory=list)
-    updated_input: Optional[dict] = None
+    __slots__ = ("decision", "reasons")
+
+    def __init__(self, decision: str = ALLOW, reasons: Optional[list] = None):
+        self.decision = decision
+        self.reasons = list(reasons or [])
 
     def raise_to(self, decision: str, reason: str) -> None:
         if _RANK[decision] > _RANK[self.decision]:
             self.decision = decision
         self.reasons.append(reason)
 
+    def absorb(self, other: "Verdict") -> None:
+        if other.reasons:
+            self.raise_to(other.decision, "; ".join(other.reasons))
+
 
 def short_name(tool_name: str) -> tuple[str, str]:
-    """(browser, tool) for a browser tool name, e.g. ("pane", "navigate"); ("web", "WebFetch"); ("", name) otherwise."""
+    """(browser, tool): ("pane", "navigate"), ("chrome", ...), ("web", "WebFetch"), ("shell", <name>), ("", name)."""
     m = re.match(r"^mcp__(?:remote-devices__)?Claude_Browser__(.+)$", tool_name)
     if m:
         return "pane", m.group(1)
@@ -60,10 +107,18 @@ def short_name(tool_name: str) -> tuple[str, str]:
         return "chrome", m.group(1)
     if tool_name == "WebFetch":
         return "web", "WebFetch"
+    if tool_name in SHELL_TOOLS:
+        return "shell", tool_name
     return "", tool_name
 
 
-def check_url(raw: Any, lists: Lists, where: str) -> Verdict:
+def _leak_verdict(found: list[leaks.Leak], where: str, soft: bool, v: Verdict, what: str) -> None:
+    for leak in found:
+        decision = ASK if soft and leak.kind in leaks.SOFT_IN_URLS else DENY
+        v.raise_to(decision, f"{where}: {what} a {leak.kind} ({leak.excerpt})")
+
+
+def check_url(raw: Any, lists: Lists, where: str, depth: int = 0) -> Verdict:
     """Verdict on navigating to raw; where names the call for the reason text ("navigate", "batch item 2")."""
     v = Verdict()
     if not isinstance(raw, str) or not raw.strip():
@@ -71,8 +126,15 @@ def check_url(raw: Any, lists: Lists, where: str) -> Verdict:
         return v
     if raw.strip() in ("back", "forward"):
         return v
-    for leak in leaks.find_leaks(urls.preprocess(raw)):
-        v.raise_to(DENY, f"{where}: the URL carries a {leak.kind} ({leak.excerpt}); secrets never go into a URL")
+    clean = urls.preprocess(raw)
+    if urls.is_local_path(clean):
+        v.raise_to(ASK, f"{where}: {clean[:80]} is a file on this Mac; opening it in the browser is the user's call")
+        return v
+    found = leaks.find_leaks(clean)
+    for extra in leaks.find_leaks(unquote(clean)):  # a %-encoded secret is still a secret
+        if extra not in found:
+            found.append(extra)
+    _leak_verdict(found, where, True, v, "the URL carries")
     for reading in urls.interpretations(raw):
         try:
             t = urls.parse(reading)
@@ -80,16 +142,25 @@ def check_url(raw: Any, lists: Lists, where: str) -> Verdict:
             v.raise_to(DENY, f"{where}: a browser could read this URL differently from the guard ({exc}); "
                              "write it out plainly as https://host/path")
             continue
-        _check_target(t, lists, where, v)
+        _check_target(t, lists, where, v, depth)
     return v
 
 
-def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict) -> None:
+def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict, depth: int) -> None:
+    if t.scheme == "file":
+        if t.file_host:
+            v.raise_to(DENY, f"{where}: file://{t.file_host}/ is a remote file share; the agent does not open those")
+        else:
+            v.raise_to(ASK, f"{where}: {t.url[:80]} is a file on this Mac; opening it in the browser is the user's call")
+        return
     if t.scheme not in SCHEMES_OK:
         if t.url.lower() == "about:blank":
             return
         v.raise_to(DENY, f"{where}: {t.scheme}: URLs are not opened by the agent (only http and https)")
         return
+    if t.userinfo:
+        v.raise_to(ASK, f"{where}: the URL puts a user name before the host ({t.host}), a phishing disguise; "
+                        "the user decides")
     for host_rx, path_rx in AD_PATHS:
         if host_rx.search(t.host) and path_rx.search(t.path):
             v.raise_to(DENY, f"{where}: {t.host}{t.path[:40]} is an ad-click redirect")
@@ -99,42 +170,88 @@ def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict) -> None:
         domain, source = hit
         v.raise_to(DENY, f"{where}: {t.host} is on the {source} blocklist (as {domain})")
         return
+    asked = lists.asked_by(t.host)
+    if asked:
+        v.raise_to(ASK, f"{where}: {t.host} is a payment or account page ({asked[1]}); the user decides")
+    for host_rx, path_rx in ASK_PATHS:
+        if host_rx.search(t.host) and path_rx.search(t.path):
+            v.raise_to(ASK, f"{where}: {t.host}{t.path[:40]} grants access, changes security or spends money")
     last = t.path.rsplit("/", 1)[-1].lower()
     ext = last.rsplit(".", 1)[-1] if "." in last else ""
     if ext in DOWNLOAD_EXT:
         v.raise_to(ASK, f"{where}: {last} is a download ({ext}); downloads need the user's go-ahead")
-    if t.is_ip and not _private_ip(t.host):
-        v.raise_to(ASK, f"{where}: {t.host} is a bare public IP address, a common sign of a malware host")
+    _check_network(t.host, where, v)
+    if depth < 2:
+        for target in redirect_targets(t):
+            v.absorb(check_url(target, lists, f"{where} (link wrapper to {target[:60]})", depth + 1))
 
 
-def _private_ip(host: str) -> bool:
+def _check_network(host: str, where: str, v: Verdict) -> None:
+    if host.endswith(".local"):
+        v.raise_to(ASK, f"{where}: {host} is a device on the local network")
+        return
     try:
         ip = ipaddress.ip_address(host.strip("[]"))
     except ValueError:
-        return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+        return
+    mapped = getattr(ip, "ipv4_mapped", None)
+    ip = mapped or ip
+    if ip.is_loopback:
+        return  # the user's own dev servers
+    if ip.is_private or ip.is_link_local:
+        v.raise_to(ASK, f"{where}: {host} is a device on the local network (a router or NAS admin page)")
+    else:
+        v.raise_to(ASK, f"{where}: {host} is a bare public IP address, a common sign of a malware host")
+
+
+def redirect_targets(t: urls.Target) -> list[str]:
+    """The destinations a link wrapper (google.com/url, youtube.com/redirect, ...) sends the browser on to."""
+    out = []
+    for host_rx, path_rx, params in REDIRECTORS:
+        if host_rx.search(t.host) and path_rx.search(t.path):
+            query = parse_qs(t.query)
+            for p in params:
+                out.extend(q for q in query.get(p, []) if q.strip())
+    return out
 
 
 def check_text(text: Any, where: str, v: Verdict) -> None:
     """Deny text that would hand a secret or card number to a web page."""
-    if not isinstance(text, str):
-        return
-    for leak in leaks.find_leaks(text):
-        v.raise_to(DENY, f"{where}: would send a {leak.kind} ({leak.excerpt}) to the page")
+    if isinstance(text, str):
+        _leak_verdict(leaks.find_leaks(text), where, False, v, "would send the page")
 
 
 def check_script(text: Any, lists: Lists, where: str, v: Verdict) -> None:
-    """A script may not leak secrets, nor navigate or open a pop-up to a URL the guard would refuse."""
+    """A script may not leak secrets, nor navigate, open a pop-up or send a request to a URL the guard would refuse."""
     if not isinstance(text, str):
         return
-    check_text(text, where, v)
-    for m in _JS_NAVIGATION.finditer(text):
+    _leak_verdict(leaks.find_leaks(text), where, True, v, "the script carries")
+    if _EVASION.search(text):
+        v.raise_to(DENY, f"{where}: the script would hide or dismiss YouTube's ad-blocker notice; when YouTube shows "
+                         "it, the shield stands down and the user hears about it instead")
+    for m in _JS_SINK.finditer(text):
         target = m.group(2)
-        if target.startswith(("/", "#", "?", "${")):
+        if target.startswith(("/", "#", "?", "${", ".")) or target in ("about:blank",):
             continue
-        sub = check_url(target, lists, f"{where} (script navigates to {target[:60]})")
-        if sub.decision != ALLOW:
-            v.raise_to(sub.decision, "; ".join(sub.reasons))
+        target = re.sub(r"^ws(s?):", r"http\1:", target, flags=re.I)  # a WebSocket host is judged like a web host
+        sub = check_url(target, lists, f"{where} (script sends the page to {target[:60]})")
+        v.absorb(sub)
+
+
+def check_shell(command: Any, where: str, v: Verdict) -> None:
+    if not isinstance(command, str):
+        return
+    for rx, what in SHELL_LURES:
+        if rx.search(command):
+            v.raise_to(ASK, f"{where}: this command {what}, the last step of a 'paste this into Terminal' lure; "
+                            "the user decides")
+
+
+def is_shield(text: Any) -> bool:
+    """The shield call, or the page script it expands to: PostToolUse sees the input after the guard's rewrite."""
+    return isinstance(text, str) and (
+        text.strip().rstrip(";") == SHIELD_CALL or text.lstrip().startswith("// browser-shield page script")
+    )
 
 
 def expand_shield(text: Any) -> Optional[str]:
@@ -149,29 +266,30 @@ def evaluate(tool_name: str, tool_input: Any, lists: Optional[Lists] = None) -> 
     v = Verdict()
     if not browser or not isinstance(tool_input, dict):
         return v
+    if browser == "shell":
+        check_shell(tool_input.get("command"), tool, v)
+        return v
     lists = lists if lists is not None else Lists()
-    if tool in ("navigate", "WebFetch") or (tool == "preview_start" and "url" in tool_input):
-        sub = check_url(tool_input.get("url"), lists, tool)
-        if sub.reasons:
-            v.raise_to(sub.decision, "; ".join(sub.reasons))
-    elif tool == "browser_batch":
+    if tool == "browser_batch":
         _check_batch(tool_input, lists, v)
+    elif tool == "preview_start" and "url" not in tool_input:
+        pass  # a dev server from .claude/launch.json, by name
     else:
         _check_action(tool, tool_input, lists, tool, v)
     return v
 
 
 def _check_action(tool: str, inp: dict, lists: Lists, where: str, v: Verdict) -> None:
-    if tool == "navigate":
-        sub = check_url(inp.get("url"), lists, where)
-        if sub.reasons:
-            v.raise_to(sub.decision, "; ".join(sub.reasons))
+    if tool in ("navigate", "preview_start", "WebFetch"):
+        v.absorb(check_url(inp.get("url"), lists, where))
     elif tool == "javascript_tool":
         check_script(inp.get("text"), lists, where, v)
     elif tool == "computer" and inp.get("action") == "type":
         check_text(inp.get("text"), where, v)
     elif tool == "form_input":
         check_text(inp.get("value"), where, v)
+    elif tool in ("file_upload", "upload_image"):
+        v.raise_to(ASK, f"{where}: uploads a file from this Mac to a web page; the user decides")
 
 
 def _check_batch(inp: dict, lists: Lists, v: Verdict) -> None:
@@ -222,7 +340,7 @@ def needs_shield_reminder(tool_name: str, tool_input: Any) -> Optional[str]:
             if item.get("name") == "navigate" and isinstance(item["input"].get("url"), str):
                 urls_loaded.append(item["input"]["url"])
                 shield_after = False
-            elif item.get("name") == "javascript_tool" and expand_shield(item["input"].get("text")) is not None:
+            elif item.get("name") == "javascript_tool" and is_shield(item["input"].get("text")):
                 shield_after = True
     if not urls_loaded or shield_after:
         return None
@@ -231,3 +349,51 @@ def needs_shield_reminder(tool_name: str, tool_input: Any) -> Optional[str]:
     except urls.UnreadableURL:
         return None
     return host if re.search(r"(^|\.)youtube(-nocookie)?\.com$", host) else None
+
+
+def _response_text(tool_response: Any) -> str:
+    """Every string in a tool response, joined: MCP responses are content-block lists whose shape is undocumented."""
+    if isinstance(tool_response, str):
+        return tool_response
+    parts: list[str] = []
+
+    def walk(x: Any) -> None:
+        if isinstance(x, str):
+            parts.append(x)
+        elif isinstance(x, dict):
+            for val in x.values():
+                walk(val)
+        elif isinstance(x, list):
+            for val in x:
+                walk(val)
+
+    walk(tool_response)
+    return "\n".join(parts) if parts else json.dumps(tool_response)
+
+
+def landed_on_blocked(tool_name: str, tool_response: Any, lists: Lists) -> Optional[str]:
+    """After a navigation: the blocklisted host the page ended up on (a redirect), or None."""
+    browser, tool = short_name(tool_name)
+    if browser not in ("pane", "chrome") or tool not in ("navigate", "browser_batch", "preview_start"):
+        return None
+    text = _response_text(tool_response)
+    for raw in re.findall(r"navigated to (\S+)", text):
+        try:
+            t = urls.parse(raw)
+        except urls.UnreadableURL:
+            continue
+        hit = lists.blocked_by(t.host) if t.scheme in SCHEMES_OK else None
+        if hit:
+            return f"{t.host} (on the {hit[1]} blocklist)"
+    return None
+
+
+def injection_phrase(tool_name: str, tool_response: Any) -> Optional[str]:
+    """A phrase in page text addressed to an AI agent ("ignore previous instructions"), or None."""
+    browser, tool = short_name(tool_name)
+    if browser not in ("pane", "chrome", "web") or tool not in (
+        "get_page_text", "read_page", "find", "javascript_tool", "WebFetch"
+    ):
+        return None
+    m = INJECTION_PHRASES.search(_response_text(tool_response))
+    return " ".join(m.group(0).split())[:80] if m else None

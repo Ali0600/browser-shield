@@ -13,14 +13,12 @@ import codecs
 import ipaddress
 import re
 import unicodedata
-from dataclasses import dataclass
+from collections import namedtuple
 from typing import Optional
 from urllib.parse import unquote_to_bytes
 
 SPECIAL_SCHEMES = {"http": 80, "https": 443, "ws": 80, "wss": 443, "ftp": 21, "file": None}
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]*):")
-# The navigate tool takes "example.com:8080/x" without a scheme; a browser would read "example.com" as the scheme.
-_HOST_PORT = re.compile(r"^[^/\\?#@:]+:\d*(?:[/\\?#]|$)")
 # Forbidden domain code points (WHATWG "forbidden domain code point"): C0 controls, space, % and these.
 _FORBIDDEN_HOST = set("\x00\t\n\r #/:<>?@[\\]^|%\x7f") | {chr(c) for c in range(0x20)}
 # Label separators UTS 46 maps to a full stop.
@@ -31,14 +29,19 @@ class UnreadableURL(ValueError):
     """The URL cannot be parsed the way a browser would; a guard should refuse it."""
 
 
-@dataclass(frozen=True)
-class Target:
-    scheme: str  # lower case, without the colon
-    host: str  # ASCII (punycode), lower case, no trailing dot; IPv4 dotted; IPv6 in brackets; "" for non-special
-    port: Optional[int]
-    path: str  # the raw path after the host, without query or fragment ("" for non-special schemes)
-    query: str  # raw, without the "?"
-    url: str  # the input after the browser's preprocessing
+class Target(namedtuple("Target", "scheme host port path query url userinfo file_host")):
+    """Where a URL goes.
+
+    scheme: lower case, no colon. host: ASCII (punycode), lower case, no trailing dot; IPv4 dotted; IPv6 in brackets;
+    "" for non-special schemes. port: int or None. path: raw path, no query or fragment. query: raw, no "?".
+    url: the input after preprocessing. userinfo: a "user:password@" came before the host. file_host: for file:
+    URLs, the server of a remote share (file://server/share), else "".
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, scheme, host, port, path, query, url, userinfo=False, file_host=""):
+        return super().__new__(cls, scheme, host, port, path, query, url, userinfo, file_host)
 
     @property
     def is_special(self) -> bool:
@@ -49,31 +52,66 @@ class Target:
         return self.host.startswith("[") or bool(re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", self.host))
 
 
+# WHATWG strips C0 controls and space; the navigate tool also trims what JavaScript's trim() does (measured
+# 2026-10-26: NBSP, U+FEFF and U+2028 around a URL were trimmed and the page loaded).
+_TRIM = "".join(chr(c) for c in range(0x21)) + "\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009" \
+    "\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+MAX_LENGTH = 8192
+# Schemes that are never a host:port the tool would default to https.
+_NEVER_HOST = {"javascript", "vbscript", "data", "blob", "filesystem", "view-source", "about", "file", "chrome",
+               "chrome-extension", "devtools", "intent", "itms-services", "mailto", "tel", "sms", "ws", "wss", "ftp"}
+
+
 def preprocess(raw: str) -> str:
-    """Strip leading and trailing C0 controls and spaces, then remove every tab, CR and LF (WHATWG basic parser)."""
-    s = raw.strip("".join(chr(c) for c in range(0x21)))
+    """Trim as the browser and the navigate tool do, then remove every tab, CR and LF (WHATWG basic parser)."""
+    s = raw.strip(_TRIM)
     return s.replace("\t", "").replace("\n", "").replace("\r", "")
 
 
-def interpretations(raw: str, default_scheme: str = "https") -> list[str]:
-    """Every reading of an agent-typed URL a browser tool could act on.
+def is_local_path(raw: str) -> bool:
+    """True for "/abs", "~/x", "./x", "\\x": the navigate tool opens these as files on this Mac ("//host" is a URL)."""
+    s = preprocess(raw)
+    return s.startswith(("/", "\\", "~", ".")) and not s.startswith("//")
 
-    The navigate tool "defaults to https://" when no protocol is given, but which inputs count as having none is not
-    documented: "localhost:3000" has a scheme ("localhost") to a browser and none to a person. A guard checks every
-    reading and keeps the strictest verdict.
+
+def interpretations(raw: str, default_scheme: str = "https") -> list[str]:
+    """Every reading of an agent-typed URL the navigate tool could act on; a guard keeps the strictest verdict.
+
+    Measured against the tool on 2026-10-26: "example.com" and "//example.com/x" open over https, "example.com:443/a"
+    opens https://example.com/a (a browser alone would read "example.com:" as a scheme), and "user:pass@example.com"
+    opens example.com. Local paths ("/x", "~/x") are files: see is_local_path.
     """
     s = preprocess(raw)
+    if s.startswith("//"):
+        return [f"{default_scheme}:{s}"]
     m = _SCHEME.match(s)
     if not m:
         return [f"{default_scheme}://{s}"]
-    readings = [s]
-    if m.group(1).lower() not in SPECIAL_SCHEMES and _HOST_PORT.match(s):
-        readings.append(f"{default_scheme}://{s}")
-    return readings
+    scheme, rest = m.group(1).lower(), s[m.end():]
+    if rest.startswith(("/", "\\")) or scheme in SPECIAL_SCHEMES or scheme in _NEVER_HOST:
+        return [s]
+    if re.match(r"\d*(?:[/\\?#]|$)", rest):
+        return [f"{default_scheme}://{s}"]  # host:port
+    if "@" in re.split(r"[/\\?#]", rest, 1)[0]:
+        return [s, f"{default_scheme}://{s}"]  # user:password@host, or an app scheme: both are judged
+    return [s]
 
 
 def parse(raw: str) -> Target:
     """Parse one URL as a browser would. Raises UnreadableURL for anything the WHATWG parser would reject."""
+    if len(raw) > MAX_LENGTH:
+        raise UnreadableURL(f"URL longer than {MAX_LENGTH} characters")
+    if any(0xD800 <= ord(ch) <= 0xDFFF or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in preprocess(raw)):
+        raise UnreadableURL("control character or lone surrogate in the URL")
+    try:
+        return _parse(raw)
+    except UnreadableURL:
+        raise
+    except (UnicodeError, ValueError) as exc:  # a lone surrogate, an encoder refusing a label: unreadable, not a crash
+        raise UnreadableURL(f"{type(exc).__name__}: {exc}") from exc
+
+
+def _parse(raw: str) -> Target:
     s = preprocess(raw)
     m = _SCHEME.match(s)
     if not m:
@@ -83,7 +121,9 @@ def parse(raw: str) -> Target:
     if scheme not in SPECIAL_SCHEMES:
         return Target(scheme, "", None, "", "", s)
     if scheme == "file":
-        return Target(scheme, "", None, rest, "", s)
+        m = re.match(r"^[/\\]{2}([^/\\?#]*)", rest)
+        share = (m.group(1) if m else "").lower()
+        return Target(scheme, "", None, rest, "", s, file_host="" if share in ("", "localhost") else share)
     # Special schemes: any run of / and \ after the colon is skipped, even none ("http:evil.com" is http://evil.com/).
     rest = rest.lstrip("/\\")
     end = len(rest)
@@ -93,12 +133,13 @@ def parse(raw: str) -> Target:
             break
     authority, tail = rest[:end], rest[end:]
     # The host follows the LAST "@"; every earlier "@" belongs to the userinfo.
-    if "@" in authority:
+    userinfo = "@" in authority
+    if userinfo:
         authority = authority.rsplit("@", 1)[1]
     host_text, port = _split_port(authority)
     host = parse_host(host_text)
     path, query = _split_tail(tail)
-    return Target(scheme, host, port, path, query, s)
+    return Target(scheme, host, port, path, query, s, userinfo=userinfo)
 
 
 def _split_port(authority: str) -> tuple[str, Optional[int]]:
@@ -135,6 +176,8 @@ def parse_host(text: str) -> str:
     if text == "":
         raise UnreadableURL("empty host")
     if text.startswith("["):
+        if "%" in text:
+            raise UnreadableURL(f"zone id in IPv6 literal {text!r}")
         try:
             return "[" + ipaddress.IPv6Address(text[1:-1]).compressed + "]"
         except ValueError as exc:
@@ -161,19 +204,24 @@ def domain_to_ascii(domain: str) -> str:
     labels = mapped.split(".")
     if labels and labels[-1] == "" and len(labels) > 1:
         labels = labels[:-1]  # one trailing dot is the same host ("evil.com." is "evil.com")
+    if "\u200c" in mapped or "\u200d" in mapped:
+        raise UnreadableURL(f"zero-width joiner in host {domain!r}")  # browsers refuse these (CheckJoiners)
     out = []
     for label in labels:
         if label.isascii():
             out.append(label)
             continue
         try:
-            out.append(codecs.encode(label, "idna").decode("ascii"))
+            if "ß" in label or "ς" in label:
+                # Browsers keep ß and ς (UTS 46 nontransitional); the stdlib codec would fold them to ss and σ.
+                out.append("xn--" + codecs.encode(label, "punycode").decode("ascii"))
+            else:
+                out.append(codecs.encode(label, "idna").decode("ascii"))
         except UnicodeError as exc:
             raise UnreadableURL(f"cannot convert host label {label!r} to punycode") from exc
-    host = ".".join(out)
-    if host == "" or host.startswith(".") or ".." in host:
-        raise UnreadableURL(f"empty label in host {domain!r}")
-    return host
+    if not out or "" in out:
+        raise UnreadableURL(f"empty label in host {domain!r}")  # "a..b", ".a", "a.." (one trailing dot is fine)
+    return ".".join(out)
 
 
 def _ends_in_number(host: str) -> bool:

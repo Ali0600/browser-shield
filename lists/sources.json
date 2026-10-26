@@ -1,0 +1,34 @@
+[
+  {
+    "name": "hagezi-tif-mini",
+    "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini-onlydomains.txt",
+    "what": "HaGeZi Threat Intelligence Feeds (mini): malware, phishing, scam, C2; plain domains, rebuilt daily",
+    "license": "GPL-3.0 (fetched into the git-ignored cache, never redistributed)",
+    "min_entries": 50000,
+    "max_bytes": 20000000
+  },
+  {
+    "name": "urlhaus-filter",
+    "url": "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-hosts.txt",
+    "what": "malware-filter's URLhaus-derived hosts (malware download hosts), updated twice a day",
+    "license": "CC0 / MIT per the project README",
+    "min_entries": 50,
+    "max_bytes": 5000000
+  },
+  {
+    "name": "phishing-army",
+    "url": "https://phishing.army/download/phishing-army-domains.txt",
+    "what": "Phishing Army: phishing domains from PhishTank, OpenPhish, CERT.PL and others, every three hours",
+    "license": "Feeds without added restriction; generator GPLv3",
+    "min_entries": 10000,
+    "max_bytes": 20000000
+  },
+  {
+    "name": "peter-lowe",
+    "url": "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=nohtml&showintro=0&mimetype=plaintext",
+    "what": "Peter Lowe's ad and tracking servers (highest-level domains only); covers the ad-click redirect hosts",
+    "license": "No formal licence; the site invites combining it with other lists",
+    "min_entries": 1000,
+    "max_bytes": 2000000
+  }
+]

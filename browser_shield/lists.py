@@ -7,7 +7,6 @@ the compiled index answers a lookup in well under a millisecond without loading 
 from __future__ import annotations
 
 import re
-import sqlite3
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
@@ -59,6 +58,8 @@ def compile_index(sources: Iterable[tuple[str, Path]], index: Path = INDEX) -> d
 
     Built in a temporary file and moved into place, so a running hook never sees a half-written index.
     """
+    import sqlite3
+
     index.parent.mkdir(parents=True, exist_ok=True)
     tmp = index.with_suffix(".tmp")
     if tmp.exists():
@@ -81,6 +82,21 @@ def read_list(path: Path) -> set[str]:
     return set(parse_file(path)) if path.exists() else set()
 
 
+def index_entries(index: Path, host: str) -> list[str]:
+    """The downloaded lists that name host or a parent domain of it ("list: domain"), ignoring the allow list."""
+    if not index.exists():
+        return []
+    import sqlite3
+
+    suffixes = urls.host_suffixes(host)
+    con = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+    try:
+        rows = con.execute(f"SELECT d, src FROM domains WHERE d IN ({','.join('?' * len(suffixes))})", suffixes).fetchall()
+    finally:
+        con.close()
+    return [f"{src}: {d}" for d, src in rows]
+
+
 class Lists:
     """The block and allow sets a guard consults: curated text lists always, the compiled index when it exists."""
 
@@ -90,7 +106,15 @@ class Lists:
         for name in ("ad-hosts.txt", "block.local.txt"):
             for d in read_list(lists_dir / name):
                 self.block.setdefault(d, name)
+        self.ask = read_list(lists_dir / "ask-hosts.txt")
         self.index = index if index.exists() else None
+
+    def asked_by(self, host: str) -> Optional[tuple[str, str]]:
+        """(matching domain, list name) when host is a payment or account host the user decides about."""
+        for s in urls.host_suffixes(host):
+            if s in self.ask:
+                return s, "ask-hosts.txt"
+        return None
 
     def allowed(self, host: str) -> bool:
         return any(s in self.allow for s in urls.host_suffixes(host))
@@ -107,6 +131,8 @@ class Lists:
                 return s, self.block[s]
         if self.index is None or self.allowed(host):
             return None
+        import sqlite3
+
         con = sqlite3.connect(f"file:{self.index}?mode=ro", uri=True)
         try:
             marks = ",".join("?" * len(suffixes))

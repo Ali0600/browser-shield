@@ -3,14 +3,16 @@
 // where the shield already runs, `browserShield()` returns its status. A full navigation clears it.
 //
 // What it does, all inside this page and nowhere else:
-//   YouTube: skips each in-stream ad the moment it starts (mutes it, presses Skip, seeks it to its end), hides
-//            display ads, and stops for good if YouTube shows its ad-blocker enforcement notice (never hides it).
-//   Any site: hides common ad slots, cancels clicks on ad-click links, app-launching links and download links,
-//            refuses cross-origin pop-ups, answers alert/confirm/prompt and "Leave site?" without a dialog, denies
-//            notification, location, camera and microphone requests, and drops requests to ad-network hosts.
+//   YouTube: skips each in-stream ad the moment it starts (mutes it, seeks it to its end), hides display ads, and
+//            reports YouTube's ad-blocker notice, error screens and stalls; on a notice it stands down for good and
+//            never hides or dismisses it. On YouTube it replaces no built-in function (YouTube watches for that).
+//   Any other site: hides common ad slots, cancels clicks, navigations and form posts to ad, app-launch and download
+//            targets, refuses cross-origin pop-ups, answers alert/confirm/prompt/print and "Leave site?" without a
+//            dialog, denies notification, location, camera, clipboard, fullscreen and keyboard-lock requests, and drops
+//            requests to ad-network hosts.
 // It leaves local dev hosts (localhost, 127.x, *.localhost, *.test) alone: the app under test must behave as built.
 (() => {
-  const VERSION = 1;
+  const VERSION = 2;
   const w = window;
   if (w.__browserShield) return w.__browserShield.status();
 
@@ -31,8 +33,8 @@
   const isYouTube = /(^|\.)youtube(-nocookie)?\.com$/.test(host);
 
   const state = {
-    version: VERSION, host, youtube: isYouTube, enabled: true, enforcement: false,
-    adsSkipped: 0, skipClicks: 0, clicksBlocked: 0, popupsBlocked: 0, requestsBlocked: 0,
+    version: VERSION, host, youtube: isYouTube, enabled: true, enforcement: false, enforcementSign: '',
+    adsSkipped: 0, clicksBlocked: 0, navigationsBlocked: 0, popupsBlocked: 0, requestsBlocked: 0,
     dialogsAnswered: 0, permissionsDenied: 0, log: [],
   };
   const note = (kind, detail) => {
@@ -55,61 +57,98 @@
     if (isDownload || DOWNLOAD_EXT.test(last)) return `download ${last || u.hostname}`;
     return '';
   };
+  const cancel = (e, counter, kind, why) => {
+    e.preventDefault();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    state[counter]++;
+    note(kind, why);
+  };
 
-  // ---- clicks on ad, app-launch and download links ------------------------------------------------------------
+  // ---- clicks and form posts to ad, app-launch and download targets (listeners, not patches: safe on YouTube) ----
   const onClick = (e) => {
     if (!state.enabled) return;
     const a = e.target && e.target.closest && e.target.closest('a[href], area[href]');
     if (!a) return;
     const why = linkVerdict(a.href, a.hasAttribute('download'));
-    if (!why) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    state.clicksBlocked++;
-    note('click blocked', why);
+    if (why) cancel(e, 'clicksBlocked', 'click blocked', why);
   };
   w.addEventListener('click', onClick, true);
   w.addEventListener('auxclick', onClick, true);
-
-  // ---- pop-ups ----------------------------------------------------------------------------------------------------
-  const realOpen = w.open;
-  w.open = function (url, ...rest) {
-    const u = toURL(url === undefined ? 'about:blank' : url);
-    if (!state.enabled || (u && u.origin === location.origin)) return realOpen.call(this, url, ...rest);
-    state.popupsBlocked++;
-    note('pop-up blocked', url);
-    return null;
-  };
-
-  // ---- dialogs that would hang an automated session ---------------------------------------------------------------
-  const answer = (kind, value) => function (msg) {
-    state.dialogsAnswered++;
-    note(kind, msg === undefined ? '' : msg);
-    return value;
-  };
-  w.alert = answer('alert', undefined);
-  w.confirm = answer('confirm (answered Cancel)', false);
-  w.prompt = answer('prompt (answered Cancel)', null);
-  w.addEventListener('beforeunload', (e) => {
-    if (state.enabled) e.stopImmediatePropagation();
+  w.addEventListener('submit', (e) => {
+    if (!state.enabled || !e.target) return;
+    const why = linkVerdict(e.target.action || location.href, false);
+    if (why) cancel(e, 'clicksBlocked', 'form post blocked', why);
   }, true);
 
-  // ---- permission prompts ------------------------------------------------------------------------------------------
-  const deny = (what) => { state.permissionsDenied++; note('permission denied', what); };
-  if (w.Notification) {
-    w.Notification.requestPermission = () => { deny('notifications'); return Promise.resolve('denied'); };
-  }
-  if (navigator.geolocation) {
-    const refuse = (ok, fail) => { deny('location'); if (fail) setTimeout(() => fail({ code: 1, message: 'denied by browser-shield' })); return 0; };
-    navigator.geolocation.getCurrentPosition = refuse;
-    navigator.geolocation.watchPosition = refuse;
-  }
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    navigator.mediaDevices.getUserMedia = () => { deny('camera/microphone'); return Promise.reject(new DOMException('denied by browser-shield', 'NotAllowedError')); };
+  // ---- navigations the page starts itself (redirect chains, location.href = ..., downloads), where supported ----
+  if (w.navigation && w.navigation.addEventListener) {
+    w.navigation.addEventListener('navigate', (e) => {
+      if (!state.enabled || !e.cancelable) return;
+      const why = e.downloadRequest != null
+        ? `download ${e.downloadRequest || 'file'}`
+        : linkVerdict(e.destination && e.destination.url, false);
+      if (why) cancel(e, 'navigationsBlocked', 'navigation blocked', why);
+    });
   }
 
-  // ---- requests to ad networks (not on YouTube, whose own ad requests trigger its ad-blocker detection) -----------
+  // ---- everything below replaces built-in functions, so it stays off YouTube -------------------------------------
   if (!isYouTube) {
+    const realOpen = w.open;
+    w.open = function (url, ...rest) {
+      const u = toURL(url === undefined ? 'about:blank' : url);
+      if (!state.enabled || (u && u.origin === location.origin)) return realOpen.call(this, url, ...rest);
+      state.popupsBlocked++;
+      note('pop-up blocked', url);
+      return null;
+    };
+
+    // Dialogs that would hang an automated session.
+    const answer = (kind, value) => function (msg) {
+      state.dialogsAnswered++;
+      note(kind, msg === undefined ? '' : msg);
+      return value;
+    };
+    w.alert = answer('alert', undefined);
+    w.confirm = answer('confirm (answered Cancel)', false);
+    w.prompt = answer('prompt (answered Cancel)', null);
+    w.print = answer('print', undefined);
+    w.addEventListener('beforeunload', (e) => {
+      if (state.enabled) e.stopImmediatePropagation();
+    }, true);
+
+    // Permission prompts, clipboard writes (the "paste this into Terminal" lure), fullscreen and keyboard traps.
+    const deny = (what) => { state.permissionsDenied++; note('denied', what); };
+    const refused = (what) => () => { deny(what); return Promise.reject(new DOMException(`${what} denied by browser-shield`, 'NotAllowedError')); };
+    if (w.Notification) {
+      w.Notification.requestPermission = () => { deny('notifications'); return Promise.resolve('denied'); };
+    }
+    if (navigator.geolocation) {
+      const refuse = (ok, fail) => { deny('location'); if (fail) setTimeout(() => fail({ code: 1, message: 'denied by browser-shield' })); return 0; };
+      navigator.geolocation.getCurrentPosition = refuse;
+      navigator.geolocation.watchPosition = refuse;
+    }
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia = refused('camera/microphone');
+    }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText = refused('clipboard write');
+      navigator.clipboard.write = refused('clipboard write');
+    }
+    if (document.execCommand) {
+      const realExec = document.execCommand.bind(document);
+      document.execCommand = (cmd, ...rest) => {
+        if (state.enabled && /^(copy|cut)$/i.test(String(cmd))) { deny('clipboard write'); return false; }
+        return realExec(cmd, ...rest);
+      };
+    }
+    if (navigator.registerProtocolHandler) navigator.registerProtocolHandler = () => deny('protocol handler');
+    if (w.Element && w.Element.prototype) {
+      w.Element.prototype.requestFullscreen = refused('fullscreen');
+      w.Element.prototype.requestPointerLock = () => deny('pointer lock');
+    }
+    if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock = refused('keyboard lock');
+
+    // Requests to ad networks.
     const realFetch = w.fetch;
     w.fetch = function (input, init) {
       const url = typeof input === 'string' ? input : input && input.url;
@@ -151,14 +190,17 @@
     'ins.adsbygoogle', 'iframe[src*="doubleclick.net"]', 'iframe[src*="googlesyndication.com"]',
     'iframe[id^="google_ads_iframe"]', 'div[id^="div-gpt-ad"]', 'div[id^="taboola-"]', '.OUTBRAIN',
   ];
+  // EasyList's youtube.com hiding rules and AdGuard's, as of 2026-10-26. Not #player-ads: uBlock Origin deliberately
+  // un-hides it. The in-player ad module stays visible; the skipper deals with it.
   const YOUTUBE_SLOTS = [
-    '#masthead-ad', '#player-ads', 'ytd-ad-slot-renderer', 'ytd-in-feed-ad-layout-renderer',
+    '#masthead-ad', 'ytd-ad-slot-renderer', 'ytd-in-feed-ad-layout-renderer', 'ytd-display-ad-renderer',
+    'ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer)', 'ytd-rich-item-renderer:has(ytd-display-ad-renderer)',
+    'ytd-search-pyv-renderer', 'ytd-promoted-sparkles-web-renderer', 'ytd-promoted-sparkles-text-search-renderer',
+    'ytd-promoted-video-renderer', 'ytd-companion-slot-renderer', 'ytd-action-companion-ad-renderer',
     'ytd-banner-promo-renderer', 'ytd-statement-banner-renderer', 'ytd-video-masthead-ad-v3-renderer',
-    'ytd-primetime-promo-renderer', 'ytd-companion-slot-renderer', 'ytd-action-companion-ad-renderer',
-    'ytd-promoted-sparkles-web-renderer', 'ytd-promoted-video-renderer', 'ytd-search-pyv-renderer',
-    'ytd-display-ad-renderer', 'ytd-merch-shelf-renderer', 'ytd-player-legacy-desktop-watch-ads-renderer',
+    'ytd-primetime-promo-renderer', 'ytd-merch-shelf-renderer', '#shopping-timely-shelf', 'yt-overlay-product-sticker',
     'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"]',
-    'ytd-rich-item-renderer:has(ytd-ad-slot-renderer)', '.ytp-ad-overlay-container', '.ytp-ad-image-overlay',
+    '.ytp-ad-overlay-container', '.ytp-ad-image-overlay',
   ];
   const style = document.createElement('style');
   style.id = 'browser-shield-style';
@@ -167,34 +209,63 @@
   (document.head || document.documentElement).appendChild(style);
 
   // ---- YouTube's in-stream ads --------------------------------------------------------------------------------------
-  // Measured 2026-10-26: a 135 s pre-roll and a two-ad mid-roll pod each cleared in under a second by seeking the ad
-  // to its end. Mutes during the ad and gives the video its own mute state back afterwards.
+  // Measured 2026-10-26 in the Browser pane: YouTube inserted ads client-side (debug_info "USDAI, ..."), each its own
+  // clip in the same <video> while #movie_player has `ad-showing`; seeking the clip to its end cleared a 135 s
+  // pre-roll and a 15 s + 30 s mid-roll pod in under 2 s. Under server-stitched ads (debug_info "SSAP, AD") the video
+  // holds ad and content as one timeline, so seeking the <video> would skip the whole video: there the player's own
+  // seekTo past the ad's progress is used instead (uBlock Origin's approach).
   let inAd = false;
   let mutedBefore = false;
   let lastAd = '';
-  const ENFORCEMENT = 'ytd-enforcement-message-view-model';
-  const tick = () => {
-    if (!state.enabled || !isYouTube || state.enforcement) return;
-    if (document.querySelector(ENFORCEMENT)) {
-      state.enforcement = true;
-      note('stopped', 'YouTube shows its ad-blocker notice; the shield stands down and leaves the notice in place');
-      return;
+  const SIGNS = [
+    ['ytd-enforcement-message-view-model', 'ad-blocker notice'],
+    ['a[href*="support.google.com/youtube/answer/3037019"]', '"Experiencing interruptions?" link'],
+  ];
+  const call = (o, name) => { try { return o && typeof o[name] === 'function' ? o[name]() : undefined; } catch { return undefined; } };
+  const watchEnforcement = () => {
+    for (const [sel, what] of SIGNS) {
+      if (document.querySelector(sel)) {
+        state.enforcement = true;
+        state.enforcementSign = what;
+        note('stopped', `YouTube shows its ${what}; the shield stands down and leaves it in place`);
+        return true;
+      }
     }
+    return false;
+  };
+  const tick = () => {
+    if (!state.enabled || !isYouTube || state.enforcement || watchEnforcement()) return;
     const player = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
     if (!player) return;
     const video = player.querySelector('video.html5-main-video') || player.querySelector('video');
-    const showing = player.classList.contains('ad-showing');
+    const mode = String((call(player, 'getStatsForNerds') || {}).debug_info || '');
+    const ssap = mode.startsWith('SSAP, AD');
+    const showing = player.classList.contains('ad-showing') || ssap;
     if (showing && !inAd) { inAd = true; mutedBefore = video ? video.muted : false; }
     if (!showing) {
       if (inAd && video) video.muted = mutedBefore;
       inAd = false;
       return;
     }
-    const skip = player.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button');
-    if (skip) { skip.click(); state.skipClicks++; }
+    if (video) video.muted = true;
+    if (ssap) {
+      const p = call(player, 'getProgressState');
+      if (p && p.duration > 0 && p.current < p.duration - 0.25 && typeof player.seekTo === 'function') {
+        const key = `ssap ${Math.round(p.duration)}`;
+        if (key !== lastAd) { lastAd = key; state.adsSkipped++; note('ad skipped', `${Math.round(p.duration)} s (stitched)`); }
+        player.seekTo(p.duration);
+      }
+      return;
+    }
     if (!video) return;
-    video.muted = true;
     const d = video.duration;
+    const length = Number(((call(player, 'getPlayerResponse') || {}).videoDetails || {}).lengthSeconds) || 0;
+    if (length && d >= length - 1) {
+      // An "ad" clip as long as the video itself is not an ad clip: never seek it.
+      const skip = player.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button');
+      if (skip) skip.click();
+      return;
+    }
     if (Number.isFinite(d) && d > 0 && video.currentTime < d - 0.25) {
       const key = `${d.toFixed(2)}@${video.src}`;
       if (key !== lastAd) { lastAd = key; state.adsSkipped++; note('ad skipped', `${Math.round(d)} s`); }
@@ -221,13 +292,22 @@
     document.addEventListener('yt-navigate-finish', watch);
   }
 
-  const status = () => ({
+  const youtubeStatus = () => {
+    const player = document.getElementById('movie_player');
+    const stats = call(player, 'getStatsForNerds') || {};
+    const playability = ((call(player, 'getPlayerResponse') || {}).playabilityStatus || {});
+    return {
+      adPlaying: Boolean(player && (player.classList.contains('ad-showing') || String(stats.debug_info || '').startsWith('SSAP, AD'))),
+      playability: playability.status ? `${playability.status}${playability.reason ? ': ' + playability.reason : ''}` : undefined,
+      stalled: stats.buffer_health_seconds === '0.00 s' && stats.resolution === '0x0',
+    };
+  };
+  const status = () => Object.assign({
     version: state.version, host: state.host, youtube: state.youtube, enabled: state.enabled,
-    enforcement: state.enforcement, adsSkipped: state.adsSkipped, skipClicks: state.skipClicks,
-    adPlaying: isYouTube ? Boolean(document.querySelector('#movie_player.ad-showing')) : undefined,
-    clicksBlocked: state.clicksBlocked, popupsBlocked: state.popupsBlocked, requestsBlocked: state.requestsBlocked,
-    dialogsAnswered: state.dialogsAnswered, permissionsDenied: state.permissionsDenied, log: state.log.slice(-10),
-  });
+    enforcement: state.enforcement, enforcementSign: state.enforcementSign || undefined, adsSkipped: state.adsSkipped,
+    clicksBlocked: state.clicksBlocked, navigationsBlocked: state.navigationsBlocked, popupsBlocked: state.popupsBlocked,
+    requestsBlocked: state.requestsBlocked, dialogsAnswered: state.dialogsAnswered, permissionsDenied: state.permissionsDenied,
+  }, isYouTube ? youtubeStatus() : {}, { log: state.log.slice(-10) });
   w.__browserShield = {
     status,
     off() { state.enabled = false; style.remove(); return status(); },

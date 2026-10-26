@@ -1,0 +1,18 @@
+# Payment, checkout and money-moving hosts: navigating there asks the user first (a prompt-injected page has sent
+# agents to pay, subscribe and transfer; see docs/DECISIONS.md). Suffix match. The guard never refuses these.
+paypal.com
+paypal.me
+buy.stripe.com
+checkout.stripe.com
+billing.stripe.com
+pay.google.com
+payments.google.com
+pay.shopify.com
+venmo.com
+cash.app
+wise.com
+revolut.com
+robinhood.com
+coinbase.com
+binance.com
+kraken.com

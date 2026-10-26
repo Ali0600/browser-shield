@@ -14,7 +14,10 @@ from browser_shield import urls
 HERE = Path(__file__).resolve().parent
 VECTORS = json.loads((HERE / "url_vectors.json").read_text(encoding="utf-8"))
 # Inputs Node accepts and we refuse on purpose (fail closed): an empty label is not a host any list could name.
-WE_REFUSE = {"https://a..b/"}
+WE_REFUSE = {"https://a..b/", "https://evil.com\uff0e\uff0e/"}
+# Inputs Node refuses and we read as a host anyway (NFKC maps U+2024 ONE DOT LEADER to "."): the reading is checked,
+# never trusted, and a browser that refuses the URL goes nowhere.
+WE_READ_MORE = {"https://evil\u2024com/": ["https", "evil.com"]}
 
 NODE_SCRIPT = """
 const v = JSON.parse(require('fs').readFileSync(0, 'utf8'));
@@ -47,21 +50,54 @@ class AgreesWithWhatwg(unittest.TestCase):
                     self.assertIsNone(mine)
                     self.assertIsNotNone(expected, "listed as refused-on-purpose but Node refuses it too")
                     continue
+                if raw in WE_READ_MORE:
+                    self.assertIsNone(expected, "listed as read-more but Node reads it too")
+                    self.assertEqual(mine, WE_READ_MORE[raw])
+                    continue
                 if expected is not None:
                     expected = [expected[0], expected[1].rstrip(".")]  # one trailing dot is the same host
                 self.assertEqual(mine, expected)
                 compared += 1
-        self.assertGreaterEqual(compared, 30)
+        self.assertGreaterEqual(compared, 55)
 
 
 class Readings(unittest.TestCase):
     def test_missing_scheme_defaults_to_https(self):
+        # As the navigate tool did on 2026-10-26: example.com, //example.com/x, example.com:443/a all opened https.
         self.assertEqual(urls.interpretations("evil.com/x"), ["https://evil.com/x"])
-        self.assertEqual(urls.interpretations("//evil.com"), ["https:////evil.com"])
-        self.assertEqual(urls.parse(urls.interpretations("//evil.com")[0]).host, "evil.com")
+        self.assertEqual(urls.interpretations("//evil.com"), ["https://evil.com"])
+        self.assertEqual(urls.interpretations("\u00a0\ufeff evil.com\u2028"), ["https://evil.com"])
 
-    def test_host_port_is_read_both_ways(self):
-        self.assertEqual(urls.interpretations("evil.com:8080/x"), ["evil.com:8080/x", "https://evil.com:8080/x"])
+    def test_host_port_is_a_host_not_a_scheme(self):
+        self.assertEqual(urls.interpretations("evil.com:8080/x"), ["https://evil.com:8080/x"])
+        self.assertEqual(urls.interpretations("localhost:3000"), ["https://localhost:3000"])
+
+    def test_credentials_or_an_app_scheme_are_read_both_ways(self):
+        self.assertEqual(urls.interpretations("user:pass@example.com/up"), ["user:pass@example.com/up",
+                                                                          "https://user:pass@example.com/up"])
+        self.assertEqual(urls.interpretations("mailto:a@b.com"), ["mailto:a@b.com"])
+        self.assertEqual(urls.interpretations("zoommtg:join?x=1"), ["zoommtg:join?x=1"])
+
+    def test_local_paths(self):
+        for raw in ("/etc/passwd", "~/.ssh/id_rsa", "./notes.html", "../x", "\\\\server\\share", " /tmp/x"):
+            with self.subTest(raw=raw):
+                self.assertTrue(urls.is_local_path(raw))
+        for raw in ("//evil.com", "evil.com", "https://x.com/", "file:///etc/passwd"):
+            with self.subTest(raw=raw):
+                self.assertFalse(urls.is_local_path(raw))
+
+    def test_userinfo_and_file_shares_are_recorded(self):
+        self.assertTrue(urls.parse("https://good.com@evil.com/").userinfo)
+        self.assertFalse(urls.parse("https://evil.com/@good.com").userinfo)
+        self.assertEqual(urls.parse("file://server/share/x").file_host, "server")
+        self.assertEqual(urls.parse("file:///etc/passwd").file_host, "")
+        self.assertEqual(urls.parse("file://localhost/etc/passwd").file_host, "")
+
+    def test_oversized_and_control_characters_are_unreadable(self):
+        for raw in ("https://x.com/" + "a" * 9000, "https://x.com/a\x01b", "https://ev\ud800il.com/"):
+            with self.subTest(raw=raw[:30]):
+                with self.assertRaises(urls.UnreadableURL):
+                    urls.parse(raw)
 
     def test_javascript_scheme_survives_whitespace_and_case(self):
         for raw in ("JaVaScRiPt:alert(1)", "  javascript:alert(1)", "java\tscript:alert(1)", "\x01javascript:x"):
