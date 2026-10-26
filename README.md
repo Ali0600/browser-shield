@@ -17,6 +17,9 @@ used to stall every visual review until it ran out. browser-shield works from th
   to ad-click, app-launch and download targets, refuses pop-ups nobody clicked for, answers dialogs, denies
   permission, clipboard and fullscreen requests, drops requests to ad networks, and hides ad slots (Fandom's
   included). Claude calls it with the text `browserShield()`; the hook swaps in the file.
+- **An autorun mod** (`hooks/autorun.ts`, optional): a Claude Code plugin hook that starts the page script by itself
+  after the pane or Chrome lands on YouTube, as a tool call of its own that the guard, your permission rules and auto
+  mode judge like any other.
 
 ## Install
 
@@ -53,6 +56,14 @@ A failed or too-small download keeps the last good copy and exits 1; the hook wa
 Personal additions go in git-ignored `lists/*.local.txt`: `block.local.txt`, `allow.local.txt`, and
 `extensions.local.txt` (ids of your own Chrome extensions Claude may open).
 
+### The autorun mod
+
+The repo root is also a Claude Code plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`). Load it for one
+session with `claude --plugin-dir ~/projects/automation/browser-shield`, or for every session the desktop app starts by
+naming the folder in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. It needs the guard
+hooks above (it replaces their reminder). In auto mode its call goes to the classifier like Claude's own; whether
+the classifier answers a plugin's call is in `docs/DECISIONS.md`.
+
 ## Use
 
 In any session, after opening a page:
@@ -62,7 +73,8 @@ javascript_tool  text: browserShield()
 ```
 
 It returns the shield's status (`adsSkipped`, `clicksBlocked`, `popupsBlocked`, `enforcement`, `playability`,
-`stalled`, a short log). After a YouTube page loads without it, the hook adds a note saying so. `enforcement: true`
+`stalled`, a short log). After a YouTube page loads without it, the hook adds a note saying so; with the autorun mod
+loaded, the mod runs it instead and the note says it started (or why it could not). `enforcement: true`
 means YouTube is showing its ad-blocker notice: the shield stands down there, gives the video its sound back, and
 never hides the notice (the hook also refuses any script that would). Local dev hosts (`localhost`, `127.x`,
 `*.localhost`, `*.test`) are left alone so the app under test behaves as built.
@@ -78,6 +90,7 @@ Claude ──tool call──▶ PreToolUse: hooks/guard.py ──deny / ask / re
                       │  browser_shield/lists.py    curated lists + cache/blocklist.sqlite, suffix lookup
                       │  browser_shield/leaks.py    API keys, private keys, cards, secret env values; redaction
                       └─ PostToolUse: blocked landing, missing page shield, text addressing AI agents
+                         ▲ hooks/autorun.ts (mod, above the guard): YouTube landing → runs the page script
 page/shield.js ── runs inside the page: YouTube ad skipper, click / navigation / pop-up / dialog / permission guards
 ```
 
@@ -101,29 +114,35 @@ page/shield.js ── runs inside the page: YouTube ad skipper, click / navigati
   they lead.
 - **Context.** WebFetch only reads (no session, nothing saved), so downloads and payment pages do not ask there;
   files inside the session's project folder and scratchpad open without asking.
+- **Autorun.** The mod reads only the browser's own report lines (`navigated to …`, `- Executed on tabId: …`), never
+  page titles or page text, follows a batch tab by tab, and decides the host itself. The page script goes in behind a
+  hostname check built from `location.hostname`, `===` and string indexing, which a page cannot patch. A page's
+  answer counts only if it has the shield status's shape and says YouTube, and no page text reaches the note.
 - **Failure.** An error while judging a call refuses that call and names the error (a parser crash must not be a
   way past the guard); unreadable hook input from Claude Code itself, or a PostToolUse error, is let through with a
   warning. A damaged list index falls back to the curated lists and says so.
 
-Not covered: a URL a shell tool hands to the pane through the desktop app's `$BROWSER` shim skips the MCP tools and
-so the hook; Chrome's `shortcuts_execute` runs an agent the hook never sees; secrets the agent builds at run time
-inside a script are invisible to a text check; a look-alike domain (Cyrillic `е`) is a different domain, caught only
-if a list names it; whether the Mac's hooks run for cloud sessions (`mcp__remote-devices__…`) is unknown. The page
-script runs in the page's own world after the page's code, so a hostile page can undo it: it stops accidents and
-ads, and the hook is the boundary.
+Not covered: a click (`computer`) that navigates onto YouTube is followed by neither the reminder nor the mod; a URL
+a shell tool hands to the pane through the desktop app's `$BROWSER` shim skips the MCP tools and so the hook;
+Chrome's `shortcuts_execute` runs an agent the hook never sees; secrets the agent builds at run time inside a script
+are invisible to a text check; a look-alike domain (Cyrillic `е`) is a different domain, caught only if a list names
+it; whether the Mac's hooks run for cloud sessions (`mcp__remote-devices__…`) is unknown. The page script runs in
+the page's own world after the page's code, so a hostile page can undo it: it stops accidents and ads, and the hook
+is the boundary.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `hooks/guard.py` | The hook entry point Claude Code runs |
+| `hooks/autorun.ts`, `hooks/hooks.json`, `.claude-plugin/` | The autorun mod and its plugin manifest |
 | `browser_shield/` | URL parsing (with `uts46.txt`), lists, leak patterns and redaction, the per-tool policy |
 | `page/shield.js` | The page script |
 | `lists/` | Curated lists, `sources.json` for the downloads; `*.local.txt` for personal additions (git-ignored) |
 | `scripts/update_lists.py` | Downloads the threat lists and compiles `cache/blocklist.sqlite` |
 | `scripts/gen_uts46.js` | Regenerates the UTS 46 table from Node (`--check` compares) |
 | `scripts/mutation_check.py` | Applies each bug in `tests/mutants.json` to a copy and requires a named test to fail |
-| `tests/` | Python `unittest` suite and `shield.test.js` (`node --test`) |
+| `tests/` | Python `unittest` suite, `shield.test.js` and `autorun.test.mjs` (`node --test`), `autorun.plugin.test.ts` (`claude plugin test .`) |
 | `docs/` | `DECISIONS.md`, `learnings.md` |
 
 ## Experience Gained
@@ -137,8 +156,9 @@ ads, and the hook is the boundary.
   Unicode code points; the sweep closed 251 characters that let a browser reach a host the guard misread.
 - Shipped an in-page YouTube ad skipper measured live on 3 videos: pre-rolls up to 135 s and ad pods of up to three
   ads cleared in under 2 seconds each, with the viewer's sound restored.
-- Ran an adversarial review (5 hunters, independent verifiers) and fixed, documented or refuted each of its 44
-  findings; covered the code with 112 Python and 29 Node tests and a mutation harness of 104 deliberate bugs, each
-  required to turn a named test red.
+- Ran two adversarial reviews (5 hunters, then 4 lenses with 2 refuters per finding over 48 agents) and fixed,
+  documented or refuted each of their 66 findings, among them a forged-status path that let a page write into
+  Claude's context; covered the code with 112 Python, 47 Node and 10 plugin-engine tests and a mutation harness of
+  129 deliberate bugs, each required to turn a named test red.
 - Designed a secret-exfiltration guard: 14 vendor token patterns, a linear-time JWT scan, Luhn plus card-network
   checks with 47 published test cards allowed, and redaction of every log line and refusal message.

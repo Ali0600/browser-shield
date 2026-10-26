@@ -726,5 +726,180 @@
   "old": "(re.compile(r\"\\b((ba|z|da|k)?sh|source|\\.)\\s+<\\(",
   "new": "(re.compile(r\"(?!)\\b((ba|z|da|k)?sh|source|\\.)\\s+<\\(",
   "expect": "test_clickfix_shapes_ask"
+ },
+ {
+  "id": "guard-reminder-reworded",
+  "file": "hooks/guard.py",
+  "old": "f\"browser-shield: the page shield is not active on {host} yet,",
+  "new": "f\"browser-shield: the page shield is off on {host} yet,",
+  "expect": "the guard's own reminder is what gets removed"
+ },
+ {
+  "id": "autorun-reminder-kept",
+  "file": "hooks/autorun.ts",
+  "old": "const kept = started && !failed ? withoutReminder(below.additionalContext) : [...(below.additionalContext ?? [])]",
+  "new": "const kept = [...(below.additionalContext ?? [])]",
+  "expect": "replaces the reminder"
+ },
+ {
+  "id": "autorun-reminder-dropped-on-failure",
+  "file": "hooks/autorun.ts",
+  "old": "const kept = started && !failed ? withoutReminder",
+  "new": "const kept = true ? withoutReminder",
+  "expect": "the reminder stays"
+ },
+ {
+  "id": "autorun-reminder-dropped-when-one-tab-fails",
+  "file": "hooks/autorun.ts",
+  "old": "const kept = started && !failed ? withoutReminder",
+  "new": "const kept = started ? withoutReminder",
+  "expect": "one refused"
+ },
+ {
+  "id": "autorun-tab-dropped",
+  "file": "hooks/autorun.ts",
+  "old": "...(tabId === undefined ? {} : { tabId }),",
+  "new": "...({}),",
+  "expect": "on the same tab"
+ },
+ {
+  "id": "autorun-gate-removed",
+  "file": "hooks/autorun.ts",
+  "old": "  return [\n    '((h) => {',",
+  "new": "  return shield\n  return [\n    '((h) => {',",
+  "expect": "runs the shield on YouTube hosts only"
+ },
+ {
+  "id": "autorun-gate-no-label-boundary",
+  "file": "hooks/autorun.ts",
+  "old": "\"    if (n <= m || h[n - m - 1] !== '.') return false;\",",
+  "new": "\"    if (n <= m) return false;\",",
+  "expect": "runs the shield on YouTube hosts only"
+ },
+ {
+  "id": "autorun-gate-uses-page-regexp",
+  "file": "hooks/autorun.ts",
+  "old": "\"  return is('youtube.com') || is('youtube-nocookie.com');\",",
+  "new": "\"  return /(^|\\\\.)youtube(-nocookie)?\\\\.com$/.test(h);\",",
+  "expect": "patched the built-ins"
+ },
+ {
+  "id": "autorun-host-unanchored",
+  "file": "hooks/autorun.ts",
+  "old": "export const YOUTUBE_HOST = /^(?:[a-z0-9-]+\\.)*youtube(?:-nocookie)?\\.com$/",
+  "new": "export const YOUTUBE_HOST = /youtube(?:-nocookie)?\\.com/",
+  "expect": "never targeted"
+ },
+ {
+  "id": "autorun-landing-ignored",
+  "file": "hooks/autorun.ts",
+  "old": "const host = hostOf(report.landed ?? input.url)",
+  "new": "const host = hostOf(input.url)",
+  "expect": "judged by where the browser says"
+ },
+ {
+  "id": "autorun-title-picks-tab",
+  "file": "hooks/autorun.ts",
+  "old": "tabId: /^- Executed on tabId: (\\S+)$/m.exec(section)?.[1],",
+  "new": "tabId: [...section.matchAll(/Executed on tabId: (\\S+)/g)].pop()?.[1],",
+  "expect": "page titles cannot pick the tab"
+ },
+ {
+  "id": "autorun-title-fakes-landing",
+  "file": "hooks/autorun.ts",
+  "old": "landed: /^(?:\\[navigate\\] )?navigated to (\\S+)$/m.exec(section)?.[1],",
+  "new": "landed: /navigated to (\\S+)/.exec(section.split('\\n').slice(-1)[0] ?? '')?.[1] ?? /navigated to (\\S+)/.exec(section)?.[1],",
+  "expect": "page titles cannot pick the tab"
+ },
+ {
+  "id": "autorun-batch-shield-clears-all",
+  "file": "hooks/autorun.ts",
+  "old": "pending.delete(keyOf(tabIdOf(args.tabId) ?? report.tabId))",
+  "new": "pending.clear()",
+  "expect": "followed tab by tab"
+ },
+ {
+  "id": "autorun-batch-leaving-youtube-ignored",
+  "file": "hooks/autorun.ts",
+  "old": "        else pending.delete(keyOf(tabId))",
+  "new": "        else void 0",
+  "expect": "followed tab by tab"
+ },
+ {
+  "id": "autorun-batch-first-header",
+  "file": "hooks/autorun.ts",
+  "old": "for (const m of text.slice(0, end).matchAll(header)) start = m.index ?? -1",
+  "new": "for (const m of text.slice(0, end).matchAll(header)) { start = m.index ?? -1; break }",
+  "expect": "cannot pose as a later step"
+ },
+ {
+  "id": "autorun-status-youtube-unchecked",
+  "file": "hooks/autorun.ts",
+  "old": "if (!status || status.youtube !== true || ",
+  "new": "if (!status || ",
+  "expect": "counts only when it is the shield status"
+ },
+ {
+  "id": "autorun-page-host-echoed",
+  "file": "hooks/autorun.ts",
+  "old": "return { kind: 'running', tabId, host: target.host, adsSkipped: ads",
+  "new": "return { kind: 'running', tabId, host: String(status.host), adsSkipped: ads",
+  "expect": "counts only when it is the shield status"
+ },
+ {
+  "id": "autorun-error-text-echoed",
+  "file": "hooks/autorun.ts",
+  "old": "reason: /^\\s*No tab with id\\b/.test(text) ? 'no such tab' : 'the script raised an error' }",
+  "new": "reason: text.trim().slice(0, 200) }",
+  "expect": "counts only when it is the shield status"
+ },
+ {
+  "id": "autorun-origin-unchecked",
+  "file": "hooks/autorun.ts",
+  "old": "if (origin !== undefined && !YOUTUBE_HOST.test(hostOf(origin))) {",
+  "new": "if (false) {",
+  "expect": "counts only when it is the shield status"
+ },
+ {
+  "id": "autorun-no-timeout",
+  "file": "hooks/autorun.ts",
+  "old": "const deadline = sleep(WAIT_MS, ",
+  "new": "const deadline = sleep(10 * WAIT_MS, ",
+  "expect": "never answers"
+ },
+ {
+  "id": "autorun-refusal-swallowed",
+  "file": "hooks/autorun.ts",
+  "old": "if (answer.deny !== undefined) return",
+  "new": "if (false) return",
+  "expect": "quotes the reason"
+ },
+ {
+  "id": "autorun-read-failure-silent",
+  "file": "hooks/autorun.ts",
+  "old": "? targets.map((t) => ({ kind: 'failed', tabId: t.tabId, reason: 'page/shield.js could not be read' }))",
+  "new": "? []",
+  "expect": "cannot be read"
+ },
+ {
+  "id": "autorun-tab-id-echoed",
+  "file": "hooks/autorun.ts",
+  "old": "/^[\\w.-]{1,40}$/.test(String(tabId)) ? `tab ${tabId}` : 'the tab'",
+  "new": "`tab ${tabId}`",
+  "expect": "the notes the model reads"
+ },
+ {
+  "id": "autorun-failure-silent",
+  "file": "hooks/autorun.ts",
+  "old": "  return needed ? { ...below, additionalContext: [...(below.additionalContext ?? []), FAILED_NOTE] } : below",
+  "new": "  return below",
+  "expect": "a failed hook still says so"
+ },
+ {
+  "id": "autorun-guard-after-mod",
+  "file": "hooks/autorun.ts",
+  "old": "  on('classic.PostToolUse', { tool_name: NAV_TOOLS }, async ($, e, next) => {\n    const below = await next(e)\n",
+  "new": "  on('classic.PostToolUse', { tool_name: NAV_TOOLS }, async ($, e, next) => {\n    const early = $.fs.read(`${$.plugin.root}/page/shield.js`).catch(() => '')\n    await (await early, $.tool.call({ tool: 'mcp__Claude_Browser__javascript_tool', action: 'javascript_exec', text: '0' }).catch(() => 0))\n    const below = await next(e)\n",
+  "expect": "on the same tab"
  }
 ]

@@ -3,10 +3,12 @@
 ## Gate (run before every commit)
 
 ```bash
-/usr/bin/python3 -I -m unittest discover -s tests -t . && node --test tests/shield.test.js
+/usr/bin/python3 -I -m unittest discover -s tests -t . && node --test tests/shield.test.js && node --experimental-strip-types --no-warnings --test tests/autorun.test.mjs && claude plugin test .
 ```
 
-About 25 s; most of it is the every-code-point sweep in `tests/test_urls.py`. After changing a guard, also run
+About 30 s; most of it is the every-code-point sweep in `tests/test_urls.py`. The last two are the autorun mod
+(`hooks/autorun.ts`): its pure parts under Node, its wiring under the engine (`claude plugin validate .` too after
+changing the manifest or what it hooks). After changing a guard, also run
 `/usr/bin/python3 -I scripts/mutation_check.py [mutant-id ...]` and add a mutant to `tests/mutants.json` for the new
 guard: each must turn a named test red (a test that has never failed proves nothing).
 
@@ -32,6 +34,10 @@ guard: each must turn a named test red (a test that has never failed proves noth
 - **`page/shield.js` must leave local dev hosts alone, replace no built-in function on YouTube, and never hide or
   dismiss YouTube's enforcement notice.** Bump `VERSION` when its behaviour changes (an older copy on a page stands
   down for a newer one).
+- **The repo root is also a Claude Code plugin** (`.claude-plugin/plugin.json`, `hooks/hooks.json` naming the mod
+  `hooks/autorun.ts`). The mod is TypeScript with erasable syntax only (Node strips its types for the unit tests: no
+  `enum`, `namespace` or parameter properties; `import type` only). It never makes a permission decision: its browser
+  call goes through `$.tool.call`, so the guard, the user's rules and auto mode judge it like the model's own.
 - **No downloaded list is committed**: `cache/` is git-ignored; `scripts/update_lists.py` fetches only the https
   URLs in `lists/sources.json`, and only with the user's go-ahead (each fetch is a download).
 - Verifying a page-script change for real: open a monetized YouTube video in the Browser pane, run `browserShield()`,

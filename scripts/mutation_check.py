@@ -28,9 +28,12 @@ TIMEOUT = 180
 # change their verdict, so they are skipped for it (tests/test_urls.py honours this variable; the gate never sets it).
 SWEEP_FILES = {"browser_shield/urls.py", "browser_shield/uts46.txt", "scripts/gen_uts46.js"}
 
+# The mod's wiring tests run under `claude plugin test`, a few seconds a run; only a mutant in the mod reaches them.
+PLUGIN_FILES = {"hooks/autorun.ts"}
 
-def run_suites(repo: Path, sweep: bool = True) -> tuple[int, int, set[str]]:
-    """(tests run, tests failed, names of failed tests) for both suites in repo."""
+
+def run_suites(repo: Path, sweep: bool = True, plugin: bool = False) -> tuple[int, int, set[str]]:
+    """(tests run, tests failed, names of failed tests) for the suites in repo."""
     env = dict(os.environ)
     if not sweep:
         env["BROWSER_SHIELD_SKIP_SWEEP"] = "1"
@@ -38,6 +41,10 @@ def run_suites(repo: Path, sweep: bool = True) -> tuple[int, int, set[str]]:
                         capture_output=True, text=True, timeout=TIMEOUT, env=env)
     js = subprocess.run(["node", "--test", "tests/shield.test.js"], cwd=repo, capture_output=True, text=True,
                         timeout=TIMEOUT)
+    autorun = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", "--test", "tests/autorun.test.mjs"],
+                             cwd=repo, capture_output=True, text=True, timeout=TIMEOUT)
+    wiring = subprocess.run(["claude", "plugin", "test", "."], cwd=repo, capture_output=True, text=True,
+                            timeout=TIMEOUT) if plugin else None
     failed: set[str] = set()
     ran = 0
     for line in py.stderr.splitlines():
@@ -57,8 +64,21 @@ def run_suites(repo: Path, sweep: bool = True) -> tuple[int, int, set[str]]:
             ran += 1
             if m.group(1) == "not ok":
                 failed.add(f"shield.js: {m.group(2)}")
-    if py.returncode not in (0, 1) or js.returncode not in (0, 1):
-        failed.add(f"<runner exit py={py.returncode} js={js.returncode}>")
+    for line in autorun.stdout.splitlines():
+        m = re.match(r"^(not ok|ok) \d+ - (.+)$", line)
+        if m:
+            ran += 1
+            if m.group(1) == "not ok":
+                failed.add(f"autorun: {m.group(2)}")
+    for line in (wiring.stdout + wiring.stderr).splitlines() if wiring else []:
+        m = re.match(r"^\((pass|fail)\) (.+?)( \[[\d.]+ms\])?$", line)
+        if m:
+            ran += 1
+            if m.group(1) == "fail":
+                failed.add(f"autorun wiring: {m.group(2)}")
+    codes = [py.returncode, js.returncode, autorun.returncode] + ([wiring.returncode] if wiring else [])
+    if any(code not in (0, 1) for code in codes):
+        failed.add(f"<runner exit codes {codes}>")
     return ran, len(failed), failed
 
 
@@ -69,10 +89,12 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory(prefix="browser-shield-mutants-") as tmp:
         repo = Path(tmp) / "repo"
         shutil.copytree(ROOT, repo, ignore=shutil.ignore_patterns("cache", ".git", "__pycache__"))
-        base_ran, base_failed, names = run_suites(repo)
-        print(f"baseline: {base_ran} tests, {base_failed} failing")
-        if base_failed or base_ran < 60:
-            print("baseline is not green (or too small); refusing to judge mutants:", sorted(names))
+        base_ran, base_failed, names = run_suites(repo, plugin=True)
+        wiring_ran = base_ran
+        base_ran, failed_without, names_without = run_suites(repo)
+        print(f"baseline: {base_ran} tests ({wiring_ran} with the mod's wiring), {base_failed + failed_without} failing")
+        if base_failed or failed_without or base_ran < 60 or wiring_ran <= base_ran:
+            print("baseline is not green (or too small); refusing to judge mutants:", sorted(names | names_without))
             return 1
         bad = 0
         for m in mutants:
@@ -90,13 +112,15 @@ def main(argv: list[str]) -> int:
                     print(f"INVALID  {m['id']}: the edit changed nothing")
                     bad += 1
                     continue
-                ran, failed, names = run_suites(repo, sweep=m["file"] in SWEEP_FILES)
+                plugin = m["file"] in PLUGIN_FILES
+                ran, failed, names = run_suites(repo, sweep=m["file"] in SWEEP_FILES, plugin=plugin)
             finally:
                 target.write_bytes(original)
             assert target.read_bytes() == original, f"restore of {m['file']} failed"
             hit = sorted(n for n in names if m["expect"] in n)
-            if ran != base_ran:
-                print(f"INVALID  {m['id']}: ran {ran} tests, baseline {base_ran} (did a module stop loading?)")
+            expected_ran = wiring_ran if plugin else base_ran
+            if ran != expected_ran:
+                print(f"INVALID  {m['id']}: ran {ran} tests, baseline {expected_ran} (did a module stop loading?)")
                 bad += 1
             elif not hit:
                 print(f"SURVIVED {m['id']}: red were {sorted(names) or 'none'}; expected one matching {m['expect']!r}")

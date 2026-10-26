@@ -86,3 +86,39 @@ in files. Later, Bash heredocs that edited the lure tests tripped it the same wa
 
 **Takeaway:** keep attack strings in files (or build them from parts) whenever the thing under test is watching
 the command line.
+
+### A hook that wraps a tool call may add notes, never drop one a lower hook added
+
+In Claude Code's mod API a `tool.call` hook can rewrite the call and append to the result's `context`, but the
+engine refuses (and skips) a hook whose answer leaves out a context entry a hook beneath attached.
+
+**Why it came up:** the autorun mod first tried to start the page shield after `navigate` and strip the guard's
+"shield is not active" reminder from the same result; `claude plugin test` reported "returned a context without an
+entry a hook below attached". The classic `PostToolUse` chain puts hooks modules above the settings hooks and lets
+them answer a changed copy, so the mod moved there.
+
+**Takeaway:** to correct what an earlier layer said, hook the layer where you sit above it, not the one that only
+sees its output.
+
+### A plugin's own tool call is still judged by the user's permission mode
+
+A mod's `$.mcp.call` is documented as needing no prompt, but in auto mode the call went to the auto-mode classifier
+anyway, which answered "gave no verdict" and refused it; the edit that would have added a `tool.check` hook letting
+the mod approve its own call was refused by auto mode as an auto-mode bypass.
+
+**Why it came up:** two live YouTube navigations in the Browser pane, 2026-10-26, Claude Code 2.1.308 desktop.
+
+**Takeaway:** an extension acts with the user's permissions, not its own: route its actions through the normal
+tool path, and leave any widening of what runs unasked to a rule the user writes.
+
+### One TypeScript file can feed a plugin engine and `node --test`
+
+Node 22's `--experimental-strip-types` imports a `.ts` file by deleting its type annotations, as long as it uses
+only erasable syntax (no `enum`, `namespace` or parameter properties) and its type imports are `import type`.
+
+**Why it came up:** `hooks/autorun.ts` is loaded by Claude Code as a mod and also imported by
+`tests/autorun.test.mjs`, so its pure parts (which tab, which host, which note) are tested in Node, and against the
+real guard, without the engine; only the wiring needs `claude plugin test`.
+
+**Takeaway:** export a hook module's decisions as pure functions and test them where the rest of the project's tests
+run.

@@ -1,0 +1,5 @@
+{
+  "name": "browser-shield",
+  "version": "0.1.0",
+  "description": "Starts browser-shield's page script on YouTube right after Claude's browser loads it, so ads are skipped without a browserShield() call."
+}
