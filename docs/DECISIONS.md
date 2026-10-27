@@ -292,3 +292,9 @@ per lens that reproduced each finding before it counted. Each finding below now 
 - **The first bypass hunter returned no findings without testing a candidate, and a second was stopped by Claude
   Code's safety check before it built any**: the bypass coverage is the hand-written probe of 69 candidates plus the
   review's two, not an agent sweep.
+
+## 2026-10-27: the public repository's licence
+
+- **MIT**: chosen (the user's pick, 2026-10-27). Short, permissive, the usual choice for a small stdlib tool. The
+  downloaded lists keep their own licences (HaGeZi's is GPL-3.0): they are fetched by each user, never committed.
+- **No licence, as the owner's other public repo has**: rejected. Readers could see the code but not reuse it.

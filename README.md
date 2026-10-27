@@ -197,3 +197,7 @@ is the boundary.
 - Deployed it like a service: each commit gated again inside its own pinned release, smoke-tested as Claude Code
   runs it and swapped in by one atomic rename; a launchd job refreshes 298,397 threat-list domains weekly, and the
   hook entries fail closed when the guard cannot run.
+
+## Licence
+
+MIT (`LICENSE`). `browser_shield/uts46.txt` is generated from Unicode data; its notice is in `NOTICE`.
