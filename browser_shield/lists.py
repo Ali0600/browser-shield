@@ -101,6 +101,7 @@ class Lists:
     """The block and allow sets a guard consults: curated text lists always, the compiled index when it exists."""
 
     def __init__(self, lists_dir: Path = LISTS_DIR, index: Path = INDEX):
+        self.lists_dir = lists_dir
         self.allow = read_list(lists_dir / "allow.txt") | read_list(lists_dir / "allow.local.txt")
         self.block: dict[str, str] = {}
         for name in ("ad-hosts.txt", "block.local.txt"):
@@ -109,7 +110,7 @@ class Lists:
         self.ask = read_list(lists_dir / "ask-hosts.txt")
         self.extensions = {
             line.split("#", 1)[0].strip().lower()
-            for line in (lists_dir / "extensions.local.txt").read_text(encoding="utf-8").splitlines()
+            for line in (lists_dir / "extensions.local.txt").read_text(encoding="utf-8", errors="replace").splitlines()
             if line.split("#", 1)[0].strip()
         } if (lists_dir / "extensions.local.txt").exists() else set()
         self.index = index if index.exists() else None

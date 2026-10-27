@@ -123,3 +123,74 @@ real guard, without the engine; only the wiring needs `claude plugin test`.
 
 **Takeaway:** export a hook module's decisions as pure functions and test them where the rest of the project's tests
 run.
+
+### Run a tool everyone depends on from a pinned release, swapped in by one rename
+
+A deployment step between "saved" and "live": copy a tested commit into its own folder, then point one symlink at it
+with `os.replace`, which is atomic, so a reader sees the old release or the new one and never half of either.
+
+**Why it came up:** Claude Code ran the guard straight from this checkout, so every save was live in every session,
+and a half-saved file crashed the hook, which Claude Code reads as a non-blocking error: calls went through
+unchecked. `scripts/install.py` now gates each commit inside its own copy, smoke-tests the copy's hook as Claude Code
+runs it, and only then swaps `current`; state that must outlive a release (downloads, the log, personal lists) lives
+in one `data/` folder each release reaches through symlinks.
+
+**Takeaway:** when other processes run your code while you edit it, give them a pinned copy and a one-rename swap.
+
+### A here-document's body is data unless a shell reads it
+
+`cat > f <<'EOF'` writes its body and `python3 - <<'EOF'` feeds it to a program: neither runs the lines as shell
+commands. Only a body fed to `sh`, `bash` or `zsh` runs line by line, and only an unquoted one expands `$(…)`.
+
+**Why it came up:** the first cut of the shell-opener rule split every line of a command, here-document bodies
+included, and the replay showed it would have refused 8 real calls, every one a file or a script being written
+whose text mentioned `open` near an ad URL. Dropping quoted bodies fed to non-shells took it to 0 of 130,038.
+
+**Takeaway:** when you read a shell line for what it will run, set aside quoted here-document bodies unless a shell
+is the program reading them.
+
+### A mutant written as exact source text goes stale when you edit its line
+
+A mutation harness that applies `old -> new` replacements depends on `old` existing verbatim; edit the guarded line
+and the mutant no longer applies, so the test it was meant to prove is back to unproven.
+
+**Why it came up:** adding opener words to the hook's fast-path regex and rewording a comment broke two existing
+mutants (`guard-fast-path-everything`, `rf-shell-reads-lists`). A check that every `old` still occurs exactly once,
+run before writing the mutant list, caught both before the next mutation run would have.
+
+**Takeaway:** after editing a line a mutant targets, re-check every mutant's pattern in the same change.
+
+### launchd runs a calendar job missed while the Mac slept; cron skips it
+
+A `StartCalendarInterval` job whose time passes while the Mac is asleep starts at the next wake, and several missed
+times coalesce into one run (`man 5 launchd.plist`); cron simply skips the missed time.
+
+**Why it came up:** the weekly threat-list refresh is set for Monday 11:00 on a laptop that is often closed then. As
+a LaunchAgent it still runs once that week, at the first wake; started by `launchctl kickstart`, it ran in the same
+bare environment the schedule gives it (pinned `HOME`, `LANG`, `PATH`) and exited 0.
+
+**Takeaway:** on a Mac, schedule periodic maintenance with a LaunchAgent, and test it with `launchctl kickstart`.
+
+### A shell redirection does not end the command
+
+`open >/dev/null https://x` runs `open https://x`: sh takes the redirection and its target out of the word list and
+passes every other word as an argument, wherever the redirection sits (`>/dev/null open https://x` too).
+
+**Why it came up:** the first shell-opener parser split commands at every `<` and `>` as if they were `;`, so the URL
+after a redirection became a separate "command" and was never judged, and the `2` of `2>/dev/null` was read as a
+target. A review's skeptic found both from one root cause.
+
+**Takeaway:** when you split a shell line into commands, treat a redirection as part of the command: drop its
+operator, its target and a descriptor number before it, and keep reading.
+
+### Python's module cache serves the first copy loaded under a name
+
+`importlib.import_module("pkg.policy")` returns whatever `sys.modules` already holds for that name, even when you
+meant to load a different copy of `pkg` from another folder.
+
+**Why it came up:** `scripts/replay.py --compare` loads a second copy of the guard under its own module name. A test
+that loaded a deliberately broken copy under that name poisoned the next test's run: comparing the repo with itself
+reported 3 moves, judged by the broken copy's cached policy.
+
+**Takeaway:** before loading a package from a path under a fixed alias, delete that alias and its submodules from
+`sys.modules`.

@@ -64,6 +64,24 @@ class Update(unittest.TestCase):
                 self.assertIn("kept previous: True", out)
                 self.assertEqual(self.domains()["bad3.example"], "feed-a", "the old copy must still be compiled")
 
+    def test_a_run_whose_fetches_fail_leaves_the_index_looking_old(self):
+        # The hook warns when the index is 8 days old; a weekly run that rebuilds it from old copies must not
+        # reset that clock, or failing updates are never seen outside the job's log.
+        import os
+        import time
+
+        self.run_update({"https://a.example/list.txt": FEED, "https://b.example/list.txt": FEED})
+        old = time.time() - 20 * 86400
+        for name in ("feed-a", "feed-b"):
+            os.utime(self.cache / f"{name}.txt", (old, old))
+        code, _ = self.run_update({"https://a.example/list.txt": OSError("network is unreachable"),
+                                   "https://b.example/list.txt": FEED})
+        self.assertEqual(code, 1)
+        self.assertAlmostEqual(self.index.stat().st_mtime, old, delta=5, msg="dated by feed-a's last good download")
+        code, _ = self.run_update({"https://a.example/list.txt": FEED, "https://b.example/list.txt": FEED})
+        self.assertEqual(code, 0)
+        self.assertGreater(self.index.stat().st_mtime, time.time() - 60, "a fully good run makes it fresh")
+
     def test_compile_only_does_not_fetch(self):
         self.run_update({"https://a.example/list.txt": FEED, "https://b.example/list.txt": FEED})
         code, out = self.run_update({}, argv=["--compile"])

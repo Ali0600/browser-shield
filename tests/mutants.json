@@ -387,8 +387,8 @@
  {
   "id": "guard-fast-path-everything",
   "file": "hooks/guard.py",
-  "old": "SHELL_WORDS = re.compile(r\"curl|wget|base64|xattr|spctl|installer|hdiutil\")",
-  "new": "SHELL_WORDS = re.compile(r\"curl|wget|base64|xattr|spctl|installer\")",
+  "old": "SHELL_WORDS = re.compile(r\"curl|wget|base64|xattr|spctl|installer|hdiutil|\\bopen\\b(?!\\()|BROWSER|webbrowser|osascript\")",
+  "new": "SHELL_WORDS = re.compile(r\"curl|wget|base64|xattr|spctl|installer|\\bopen\\b(?!\\()|BROWSER|webbrowser|osascript\")",
   "expect": "test_the_hooks_fast_path_never_skips_a_lure"
  },
  {
@@ -506,7 +506,7 @@
  {
   "id": "rf-shell-reads-lists",
   "file": "hooks/guard.py",
-  "old": "        lists = None if shell else Lists()  # shell rules read no list: a list problem must not touch Bash",
+  "old": "        lists = None if shell else Lists()",
   "new": "        lists = Lists()",
   "expect": "test_shell_calls_never_read_the_lists"
  },
@@ -985,5 +985,355 @@
   "old": "        if current is not None and old.resolve() == current:\n            continue\n",
   "new": "",
   "expect": "test_prune_keeps_newest_and_current"
+ },
+ {
+  "id": "guard-messages-name-release",
+  "file": "hooks/guard.py",
+  "old": "HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))",
+  "new": "HERE = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))",
+  "expect": "test_messages_name_the_copy_as_installed"
+ },
+ {
+  "id": "policy-opener-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "    elif base in (\"open\", \"xdg-open\"):\n",
+  "new": "    elif base in (\"_open\", \"xdg-open\"):\n",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-opener-any-scheme",
+  "file": "browser_shield/policy.py",
+  "old": "        if pane or _WEB_SCHEME.match(urls.preprocess(target)):",
+  "new": "        if True:",
+  "expect": "test_shell_openers_leave_apps_files_and_app_schemes"
+ },
+ {
+  "id": "policy-shim-http-only",
+  "file": "browser_shield/policy.py",
+  "old": "        if pane or _WEB_SCHEME.match(urls.preprocess(target)):",
+  "new": "        if _WEB_SCHEME.match(urls.preprocess(target)):",
+  "expect": "test_browser_shim_judges_every_scheme"
+ },
+ {
+  "id": "policy-shell-fallback-off",
+  "file": "browser_shield/policy.py",
+  "old": "    except ValueError:\n        return [(u, False) for u in _OPENER_THEN_URL.findall(_QUOTING.sub(\"\", text))]",
+  "new": "    except ValueError:\n        return []",
+  "expect": "test_unparseable_shell_still_judges_opener_urls"
+ },
+ {
+  "id": "guard-shell-words-no-opener",
+  "file": "hooks/guard.py",
+  "old": "|\\bopen\\b(?!\\()|BROWSER|webbrowser|osascript\")",
+  "new": "\")",
+  "expect": "test_the_hooks_fast_path_sees_every_opener"
+ },
+ {
+  "id": "policy-shortcuts-silent",
+  "file": "browser_shield/policy.py",
+  "old": "    elif tool == \"shortcuts_execute\":\n",
+  "new": "    elif tool == \"_shortcuts_execute\":\n",
+  "expect": "test_chrome_shortcuts_ask"
+ },
+ {
+  "id": "policy-shell-lists-eager",
+  "file": "browser_shield/policy.py",
+  "old": "        if targets:  # the lists are read only",
+  "new": "        if True:  # the lists are read only",
+  "expect": "test_shell_reads_the_lists_only_to_judge_an_opened_url"
+ },
+ {
+  "id": "policy-wrapper-not-skipped",
+  "file": "browser_shield/policy.py",
+  "old": "        flags = _WRAPPERS.get(os.path.basename(words[i].lstrip(\"`\")))\n",
+  "new": "        flags = None\n",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-subshell-not-followed",
+  "file": "browser_shield/policy.py",
+  "old": "            if re.fullmatch(r\"-[A-Za-z]*c[A-Za-z]*\", a):  # -c, -lc, -ec: the next word is a command line\n",
+  "new": "            if a == \"-x\":\n",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-heredoc-bodies-kept",
+  "file": "browser_shield/policy.py",
+  "old": "            if not closed or _consumer(line[:m.start()]) in _SHELLS or _PIPE_TO_SHELL.search(line[m.end():]):\n                out += body\n            elif not quoted:\n                out += [b for b in body if \"$(\" in b or \"`\" in b]\n",
+  "new": "                out += body\n",
+  "expect": "test_quoted_heredoc_bodies_are_data"
+ },
+ {
+  "id": "policy-heredoc-shell-dropped",
+  "file": "browser_shield/policy.py",
+  "old": "if not closed or _consumer(line[:m.start()]) in _SHELLS or _PIPE_TO_SHELL.search(line[m.end():]):",
+  "new": "if not closed:",
+  "expect": "test_heredoc_fed_to_a_shell_is_judged"
+ },
+ {
+  "id": "policy-heredoc-unquoted-dropped",
+  "file": "browser_shield/policy.py",
+  "old": "                out += [b for b in body if \"$(\" in b or \"`\" in b]",
+  "new": "                pass",
+  "expect": "test_heredoc_fed_to_a_shell_is_judged"
+ },
+ {
+  "id": "policy-fallback-anywhere",
+  "file": "browser_shield/policy.py",
+  "old": "_OPENER_THEN_URL = re.compile(r\"(?:\\bopen\\b|\\bwebbrowser\\b|\\$\\{?BROWSER\\b)[^\\n;&|]*?([hH]",
+  "new": "_OPENER_THEN_URL = re.compile(r\"([hH]",
+  "expect": "test_unparseable_fallback_needs_an_opener_before_the_url"
+ },
+ {
+  "id": "replay-since-ignored",
+  "file": "scripts/replay.py",
+  "old": "    return sorted((c for c in by_id.values() if c[\"ts\"][:10] >= since), key=lambda c: c[\"ts\"])",
+  "new": "    return sorted(by_id.values(), key=lambda c: c[\"ts\"])",
+  "expect": "test_since_drops_older_calls"
+ },
+ {
+  "id": "replay-no-dedup",
+  "file": "scripts/replay.py",
+  "old": "            if kept is None or call[\"ts\"] < kept[\"ts\"]:",
+  "new": "            if True:",
+  "expect": "test_a_copied_call_counts_once_at_its_earliest_copy"
+ },
+ {
+  "id": "replay-first-snapshot-only",
+  "file": "scripts/replay.py",
+  "old": "call[\"scratchpad\"], call[\"from\"] = earlier[-1], \"snapshot\"",
+  "new": "call[\"scratchpad\"], call[\"from\"] = earlier[0], \"snapshot\"",
+  "expect": "test_each_call_gets_the_scratchpad_its_session_had"
+ },
+ {
+  "id": "replay-fast-path-not-mirrored",
+  "file": "scripts/replay.py",
+  "old": "        if skipped and v.decision != self.policy.ALLOW:\n            return \"allow\", rule, True\n",
+  "new": "",
+  "expect": "test_a_non_allow_the_fast_path_skips_is_reported"
+ },
+ {
+  "id": "replay-partial-tail-parsed",
+  "file": "scripts/replay.py",
+  "old": "    for chunk in chunks[:-1]:",
+  "new": "    for chunk in chunks:",
+  "expect": "test_reading_counts_every_denominator"
+ },
+ {
+  "id": "policy-open-args-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "            out += [(b, False) for b in args[j + 1:]]\n            break\n",
+  "new": "            break\n",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-depth-fallback-off",
+  "file": "browser_shield/policy.py",
+  "old": "    if depth > MAX_DEPTH:\n        return [(u, False) for u in _OPENER_THEN_URL.findall(_QUOTING.sub(\"\", text))]\n",
+  "new": "    if depth > MAX_DEPTH:\n        return []\n",
+  "expect": "test_nesting_deeper_than_the_limit_is_still_judged"
+ },
+ {
+  "id": "policy-ifs-literal",
+  "file": "browser_shield/policy.py",
+  "old": "    text = _IFS.sub(\" \", command)\n",
+  "new": "    text = command\n",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-herestring-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "        if sep == \"<<<\" and name in _SHELLS and following:",
+  "new": "        if False:",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-pipe-to-shell-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "            if consumer in _SHELLS:\n                out += shell_targets(\" \".join(fed), depth + 1)\n",
+  "new": "            if False:\n                out += shell_targets(\" \".join(fed), depth + 1)\n",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-heredoc-pipe-ignored",
+  "file": "browser_shield/policy.py",
+  "old": " or _PIPE_TO_SHELL.search(line[m.end():])",
+  "new": "",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-env-split-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "            if words[i] in (\"-S\", \"--split-string\") and i + 1 < len(words):\n                return len(words), \" \".join(words[i + 1:])\n",
+  "new": "",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-osascript-shell-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "                for m in _DO_SHELL_SCRIPT.finditer(script):",
+  "new": "                for m in []:",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-jxa-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "                out += [(m.group(2), False) for m in _OPEN_LOCATION_JS.finditer(script)]\n",
+  "new": "",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-python-c-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "                out += [(m.group(2), False) for m in _WEBBROWSER_CALL.finditer(args[j + 1])]",
+  "new": "                pass",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-xargs-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "                out += [(w, False) for w in fed]",
+  "new": "                pass",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-open-url-equals-ignored",
+  "file": "browser_shield/policy.py",
+  "old": "        if a.startswith(\"--url=\"):",
+  "new": "        if False:",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "guard-fast-path-raw-only",
+  "file": "hooks/guard.py",
+  "old": "    return bool(SHELL_WORDS.search(command) or SHELL_WORDS.search(QUOTING.sub(\"\", command)))",
+  "new": "    return bool(SHELL_WORDS.search(command))",
+  "expect": "test_the_hooks_fast_path_sees_every_opener"
+ },
+ {
+  "id": "policy-redirect-ends-command",
+  "file": "browser_shield/policy.py",
+  "old": "        if token in _REDIRECTS:",
+  "new": "        if False:",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-redirect-digit-kept",
+  "file": "browser_shield/policy.py",
+  "old": "            if words and words[-1].isdigit():\n                words.pop()\n",
+  "new": "",
+  "expect": "test_shell_openers_leave_apps_files_and_app_schemes"
+ },
+ {
+  "id": "policy-heredoc-in-quotes",
+  "file": "browser_shield/policy.py",
+  "old": "        elif c in \"'\\\"\":\n            quote = c\n",
+  "new": "",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-heredoc-in-comment",
+  "file": "browser_shield/policy.py",
+  "old": "        elif c == \"#\" and (i == 0 or line[i - 1] in \" \\t;&|()<>\"):\n            break\n",
+  "new": "",
+  "expect": "test_shell_openers_judge_http_urls"
+ },
+ {
+  "id": "policy-unclosed-heredoc-dropped",
+  "file": "browser_shield/policy.py",
+  "old": "if not closed or _consumer(",
+  "new": "if _consumer(",
+  "expect": "test_an_unclosed_here_document_is_read_as_commands"
+ },
+ {
+  "id": "policy-unquoted-body-kept",
+  "file": "browser_shield/policy.py",
+  "old": "                out += [b for b in body if \"$(\" in b or \"`\" in b]",
+  "new": "                out += body",
+  "expect": "test_shell_openers_leave_apps_files_and_app_schemes"
+ },
+ {
+  "id": "policy-port-expansion-off",
+  "file": "browser_shield/policy.py",
+  "old": "        target = _PORT_EXPANSION.sub(\":1\", target)\n",
+  "new": "",
+  "expect": "test_shell_openers_leave_apps_files_and_app_schemes"
+ },
+ {
+  "id": "guard-open-paren-routed",
+  "file": "hooks/guard.py",
+  "old": "\\bopen\\b(?!\\()|",
+  "new": "\\bopen\\b|",
+  "expect": "test_pythons_open_does_not_load_the_policy"
+ },
+ {
+  "id": "policy-extension-message-relative",
+  "file": "browser_shield/policy.py",
+  "old": "local = os.path.realpath(os.path.join(str(lists.lists_dir), \"extensions.local.txt\"))",
+  "new": "local = \"lists/extensions.local.txt\"",
+  "expect": "test_the_ask_names_the_file_the_list_really_is"
+ },
+ {
+  "id": "lists-extensions-strict",
+  "file": "browser_shield/lists.py",
+  "old": "(lists_dir / \"extensions.local.txt\").read_text(encoding=\"utf-8\", errors=\"replace\")",
+  "new": "(lists_dir / \"extensions.local.txt\").read_text(encoding=\"utf-8\")",
+  "expect": "test_a_stray_byte_in_the_personal_list_breaks_nothing"
+ },
+ {
+  "id": "install-smoke-page-refusal-ok",
+  "file": "scripts/install.py",
+  "old": "        if out.get(\"hookSpecificOutput\", {}).get(\"permissionDecision\"):\n",
+  "new": "        if False:\n",
+  "expect": "test_smoke_refuses_a_copy_that_refuses_every_page"
+ },
+ {
+  "id": "install-remove-in-place",
+  "file": "scripts/install.py",
+  "old": "    if not tree.name.startswith(\".\"):\n        doomed",
+  "new": "    if False:\n        doomed",
+  "expect": "test_a_removal_cut_short_is_never_reused"
+ },
+ {
+  "id": "install-status-any-matcher",
+  "file": "scripts/install.py",
+  "old": "and runs_installed(e[1], root) and guards_calls(e[2])]",
+  "new": "and runs_installed(e[1], root)]",
+  "expect": "test_status_needs_a_blocking_pre_tool_use_entry_on_bash_and_browsers"
+ },
+ {
+  "id": "install-status-no-onfailure",
+  "file": "scripts/install.py",
+  "old": "if not [e for e in pre if e[3] == \"block\"]:",
+  "new": "if not pre:",
+  "expect": "test_status_needs_a_blocking_pre_tool_use_entry_on_bash_and_browsers"
+ },
+ {
+  "id": "install-status-any-event",
+  "file": "scripts/install.py",
+  "old": "pre = [e for e in entries if e[0] == \"PreToolUse\" and",
+  "new": "pre = [e for e in entries if",
+  "expect": "test_status_needs_a_blocking_pre_tool_use_entry_on_bash_and_browsers"
+ },
+ {
+  "id": "update-lists-index-looks-fresh",
+  "file": "scripts/update_lists.py",
+  "old": "        os.utime(index, (oldest, oldest))\n",
+  "new": "",
+  "expect": "test_a_run_whose_fetches_fail_leaves_the_index_looking_old"
+ },
+ {
+  "id": "replay-compare-same-copy",
+  "file": "scripts/replay.py",
+  "old": "        before, before_rule, _ = other.judge(call)",
+  "new": "        before, before_rule, _ = this.judge(call)",
+  "expect": "test_compare_judges_each_call_with_the_other_copy"
+ },
+ {
+  "id": "replay-module-cache-kept",
+  "file": "scripts/replay.py",
+  "old": "        for name in [m for m in sys.modules if m == alias or m.startswith(alias + \".\") or m == f\"{alias}_guard\"]:\n            del sys.modules[name]\n",
+  "new": "",
+  "expect": "test_main_prints_rules_and_compare_finds_no_moves_against_itself"
  }
 ]

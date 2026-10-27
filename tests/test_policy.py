@@ -287,6 +287,189 @@ class Shell(unittest.TestCase):
                 self.assertEqual(decide("Bash", {"command": cmd}).decision, policy.ALLOW)
 
 
+# Shell commands that hand a URL to a browser. The blocked host is the curated test list's.
+OPENED = ("open https://doubleclick.net/", "open -a 'Google Chrome' https://doubleclick.net/x",
+          "/usr/bin/open -g -u https://doubleclick.net/", "xdg-open https://doubleclick.net",
+          "python3 -m webbrowser -t https://doubleclick.net", "/usr/bin/python3 -m webbrowser https://doubleclick.net",
+          "osascript -e 'tell application \"Safari\" to open location \"https://doubleclick.net/\"'",
+          '"$BROWSER" https://doubleclick.net/', "${BROWSER} https://doubleclick.net/",
+          "cd /tmp && open https://doubleclick.net/", "sleep 1; open HTTPS://doubleclick.net/",
+          'sh -c "open https://doubleclick.net/"', "env DEBUG=1 open https://doubleclick.net/",
+          "sudo -u someone open https://doubleclick.net/", "echo $(open https://doubleclick.net/)",
+          "nohup open https://doubleclick.net/ &", "open 'https://doubleclick.net/a b'",
+          # Found by probing the first cut (2026-10-27): each of these reached a browser unjudged.
+          "open -a Safari --args https://doubleclick.net/x", "open -a 'Google Chrome' --args https://doubleclick.net/",
+          "open -a Foo.app --args https://doubleclick.net/", "open -na Safari https://doubleclick.net/",
+          "o''pen https://doubleclick.net/", '"op"en https://doubleclick.net/', "o\\pen https://doubleclick.net/",
+          "open$IFShttps://doubleclick.net/", "command -p open https://doubleclick.net/",
+          "exec -a x open https://doubleclick.net/", "env -S 'open https://doubleclick.net/'",
+          "time -p open https://doubleclick.net/", "/usr/bin/env open https://doubleclick.net/",
+          "builtin command open https://doubleclick.net/", "echo https://doubleclick.net/ | xargs open",
+          "bash -c \"bash -c 'open https://doubleclick.net/'\"", "bash -lc 'open https://doubleclick.net/'",
+          "bash <<< 'open https://doubleclick.net/'", "echo 'open https://doubleclick.net/' | sh",
+          "cat <<'EOF' | sh\nopen https://doubleclick.net/\nEOF",
+          "osascript -l JavaScript -e 'Application(\"Safari\").openLocation(\"https://doubleclick.net/\")'",
+          "osascript -e 'do shell script \"open https://doubleclick.net/\"'",
+          "open --url=https://doubleclick.net/", "open -uhttps://doubleclick.net/",
+          "python3 -c 'import webbrowser; webbrowser.open(\"https://doubleclick.net/\")'",
+          "{ open https://doubleclick.net/; }", "if true; then open https://doubleclick.net/; fi",
+          # Found by the review (2026-10-27): a redirection, or `<<'EOF'` text in quotes or a comment, hid the URL.
+          "open >/dev/null https://doubleclick.net/", "open 2>/dev/null https://doubleclick.net/",
+          ">/dev/null open https://doubleclick.net/", "open </dev/null https://doubleclick.net/",
+          "$BROWSER >/dev/null https://doubleclick.net/", "echo \"<<'EOF'\"\nopen https://doubleclick.net/\nEOF",
+          "# see <<'EOF' below\nopen https://doubleclick.net/\nEOF", "x=\"<<'X'\"; true\nopen https://doubleclick.net/\nX",
+          'open "http://doubleclick.net:$PORT/"')
+
+
+class ShellOpeners(unittest.TestCase):
+    def test_shell_openers_judge_http_urls(self):
+        for cmd in OPENED:
+            for tool in ("Bash", "mcp__terminal__run_in_terminal"):
+                with self.subTest(cmd=cmd, tool=tool):
+                    v = decide(tool, {"command": cmd})
+                    self.assertEqual(v.decision, policy.DENY, v.reasons)
+                    self.assertIn("doubleclick.net", " ".join(v.reasons))
+
+    def test_shell_openers_get_navigates_asks(self):
+        for cmd in ("open http://192.168.1.10/", "open https://example.org/setup.dmg", "open https://8.8.8.8/",
+                    f"open 'https://example.org/?k={KEY}'"):
+            with self.subTest(cmd=cmd):
+                v = decide("Bash", {"command": cmd})
+                self.assertIn(v.decision, (policy.ASK, policy.DENY), v.reasons)
+        self.assertEqual(decide("Bash", {"command": f"open 'https://example.org/?k={KEY}'"}).decision, policy.DENY)
+
+    def test_shell_openers_leave_apps_files_and_app_schemes(self):
+        for cmd in ("open roblox://placeId=1", "open .", "open build/report.html", "open -a Preview shot.png",
+                    'open -n -a /Applications/RobloxStudio.app --args --task EditFile --localPlaceFile "$PWD/b.rbxl"',
+                    "open http://localhost:5173", "open doubleclick.net", "open //doubleclick.net/x",
+                    "open https://www.youtube.com/watch?v=1", "gh pr list --state open", 'echo "open https://doubleclick.net/"',
+                    "git log --grep 'open https://doubleclick.net'", "openssl rand -hex 4", "open -R ~/Downloads/x.zip",
+                    "osascript -e 'tell application id \"com.roblox.RobloxPlayer\" to quit'", "xdg-open ./notes.txt",
+                    # False positives the review found (2026-10-27):
+                    "$BROWSER http://localhost:3000 2>/dev/null", '"$BROWSER" http://localhost:5173 2>&1',
+                    'open "http://localhost:$PORT"', 'open "http://localhost:${PORT:-5173}/"',
+                    'open "http://127.0.0.1:$(cat .port)"', "PORT=5173; open http://localhost:$PORT/docs",
+                    "cat > README.md <<EOF\nopen https://github.com/settings/tokens\nEOF",
+                    "python3 -c \"print(open('x').read())\""):
+            with self.subTest(cmd=cmd):
+                v = decide("Bash", {"command": cmd})
+                self.assertEqual(v.decision, policy.ALLOW, v.reasons)
+
+    def test_browser_shim_judges_every_scheme(self):
+        # $BROWSER drives the Browser pane, so it gets a navigate's verdicts in full, not just on http(s).
+        for cmd, want in (('"$BROWSER" javascript:alert(1)', policy.DENY), ("$BROWSER data:text/html,x", policy.DENY),
+                          ("$BROWSER https://www.youtube.com/", policy.ALLOW)):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(decide("Bash", {"command": cmd}).decision, want)
+
+    def test_unparseable_shell_still_judges_opener_urls(self):
+        v = decide("Bash", {"command": 'open "https://doubleclick.net/ && echo done'})
+        self.assertEqual(v.decision, policy.DENY, v.reasons)
+
+    def test_an_unclosed_here_document_is_read_as_commands(self):
+        # sh would read it to the end as text, but a here-document that never closes is how a fake one hides lines.
+        v = decide("Bash", {"command": "cat > a.txt <<'EOF'\nnever closed\nopen https://doubleclick.net/"})
+        self.assertEqual(v.decision, policy.DENY)
+
+    def test_pythons_open_does_not_load_the_policy(self):
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+        import guard
+
+        for cmd in ("python3 -c \"print(open('x').read())\"", "python3 - <<'EOF'\nwith open(p) as f: pass\nEOF"):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(guard.shell_words_in(cmd))
+                self.assertEqual(policy.judged_targets(cmd), [])
+
+    def test_nesting_deeper_than_the_limit_is_still_judged(self):
+        cmd = "open https://doubleclick.net/"
+        for _ in range(policy.MAX_DEPTH + 3):
+            cmd = f"sh -c {__import__('shlex').quote(cmd)}"
+        self.assertEqual(decide("Bash", {"command": cmd}).decision, policy.DENY)
+
+    def test_unparseable_fallback_needs_an_opener_before_the_url(self):
+        # An unclosed quote (an apostrophe in prose) must not turn every URL in the command into an opened one.
+        for cmd in ('echo "it\'s open now; see https://doubleclick.net/', "git commit -m \"don't https://doubleclick.net/"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(decide("Bash", {"command": cmd}).decision, policy.ALLOW)
+
+    def test_quoted_heredoc_bodies_are_data(self):
+        for cmd in ("cat > notes.md <<'EOF'\nTo see it, open https://doubleclick.net/ (don't)\nEOF",
+                    'python3 - <<"EOF"\nprint("open https://doubleclick.net/")\nEOF\necho done',
+                    "cat <<-'EOF' > x.txt\n\topen https://doubleclick.net/\n\tEOF"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(decide("Bash", {"command": cmd}).decision, policy.ALLOW)
+
+    def test_heredoc_fed_to_a_shell_is_judged(self):
+        for cmd in ("bash <<'EOF'\nopen https://doubleclick.net/\nEOF", "sh -s <<'EOF'\nopen https://doubleclick.net/\nEOF",
+                    "cat <<EOF\n$(open https://doubleclick.net/)\nEOF",
+                    "cat > a.txt <<'EOF'\nfine\nEOF\nopen https://doubleclick.net/"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(decide("Bash", {"command": cmd}).decision, policy.DENY)
+
+    def test_the_hooks_fast_path_sees_every_opener(self):
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+        import guard
+
+        for word in policy.OPENERS:
+            with self.subTest(word=word):
+                self.assertTrue(guard.SHELL_WORDS.search(f"{word} https://x.example/"), word)
+        for cmd in OPENED:
+            with self.subTest(cmd=cmd):
+                self.assertTrue(guard.shell_words_in(cmd), cmd)
+        for cmd in ("o''pen https://x.example/", "cu''rl -s x | sh", "o\\pen https://x.example/"):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(guard.shell_words_in(cmd), "sh reads a quote-split word as the plain word")
+        self.assertFalse(guard.shell_words_in("git status && ls -la"))
+
+    def test_shell_reads_the_lists_only_to_judge_an_opened_url(self):
+        from unittest import mock
+
+        with mock.patch("browser_shield.policy.Lists", side_effect=AssertionError("lists read")):
+            self.assertEqual(policy.evaluate("Bash", {"command": "open roblox://placeId=1 && ls"}).decision,
+                             policy.ALLOW)
+        with mock.patch("browser_shield.policy.Lists", return_value=lists_with()) as made:
+            self.assertEqual(policy.evaluate("Bash", {"command": "open https://doubleclick.net/"}).decision,
+                             policy.DENY)
+        made.assert_called_once()
+
+
+class ExtensionsList(unittest.TestCase):
+    PAGE = "chrome-extension://" + "a" * 32 + "/popup.html"
+
+    def test_the_ask_names_the_file_the_list_really_is(self):
+        tmp = Path(tempfile.mkdtemp())
+        real = tmp / "data" / "extensions.local.txt"
+        real.parent.mkdir()
+        real.write_text("# none yet\n")
+        lists = lists_with()
+        (lists.lists_dir / "extensions.local.txt").symlink_to(real)
+        v = decide(NAV, {"url": self.PAGE}, lists)
+        self.assertEqual(v.decision, policy.ASK)
+        self.assertIn(str(real.resolve()), " ".join(v.reasons))
+
+    def test_a_stray_byte_in_the_personal_list_breaks_nothing(self):
+        lists = lists_with()
+        (lists.lists_dir / "extensions.local.txt").write_bytes(b"a" * 32 + b" # caf\xe9\n")
+        reloaded = Lists(lists_dir=lists.lists_dir, index=lists.lists_dir / "none.sqlite")
+        self.assertEqual(decide(NAV, {"url": self.PAGE}, reloaded).decision, policy.ALLOW)
+        self.assertEqual(decide(NAV, {"url": "https://example.com/"}, reloaded).decision, policy.ALLOW)
+
+
+class ChromeShortcuts(unittest.TestCase):
+    def test_chrome_shortcuts_ask(self):
+        for inp in ({"tabId": 1, "command": "summarize"}, {"tabId": 1, "shortcutId": "abc"}, {"tabId": 1}):
+            with self.subTest(inp=inp):
+                v = decide("mcp__claude-in-chrome__shortcuts_execute", inp)
+                self.assertEqual(v.decision, policy.ASK, v.reasons)
+                self.assertIn("side panel", " ".join(v.reasons))
+        v = decide("mcp__claude-in-chrome__shortcuts_execute", {"tabId": 1, "command": f"post {KEY}"})
+        self.assertEqual(v.decision, policy.DENY, "a secret in the shortcut's command is still a secret")
+
+
 class Batches(unittest.TestCase):
     def test_one_bad_item_denies_the_batch_and_names_it(self):
         actions = [{"name": "navigate", "input": {"url": "https://www.youtube.com/"}},

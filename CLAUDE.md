@@ -10,7 +10,17 @@ About 30 s; most of it is the every-code-point sweep in `tests/test_urls.py`. Th
 (`hooks/autorun.ts`): its pure parts under Node, its wiring under the engine (`claude plugin validate .` too after
 changing the manifest or what it hooks). After changing a guard, also run
 `/usr/bin/python3 -I scripts/mutation_check.py [mutant-id ...]` and add a mutant to `tests/mutants.json` for the new
-guard: each must turn a named test red (a test that has never failed proves nothing).
+guard: each must turn a named test red (a test that has never failed proves nothing). A mutant's `old` is exact source
+text: an edit to a line a mutant targets breaks it, so after editing a guarded line, check every mutant still applies
+(each `old` occurs exactly once; `mutation_check.py` refuses one that does not).
+
+After a change to what the guard refuses or asks about, replay this Mac's real tool calls against the installed copy
+and read every call that moves, both directions, before installing (about 2 minutes, read-only; its output quotes
+redacted, shortened tool inputs, so it stays in the terminal):
+
+```bash
+/usr/bin/python3 -I scripts/replay.py --compare ~/.local/share/browser-shield/current
+```
 
 ## Install (after the commit)
 

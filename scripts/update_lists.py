@@ -10,6 +10,7 @@ silently switch the protection off); the compile then uses that copy and the run
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -75,6 +76,13 @@ def main(argv: list[str], fetcher: Optional[Callable[[str, int], bytes]] = None,
             print(("ok     " if rec["ok"] else "FAILED ") + f"{src['name']}: "
                   + (f"{rec['domains']} domains" if rec["ok"] else f"{rec['error']} (kept previous: {rec['kept_previous']})"))
     counts = compile_cached(sources, cache, index)
+    present = [cache / f"{s['name']}.txt" for s in sources if (cache / f"{s['name']}.txt").exists()]
+    if present and index.exists():
+        # The index is only as fresh as its oldest successful download (a source file is rewritten only by one).
+        # Rebuilt from old copies after failed fetches, it must not look new, or the hook's staleness warning and
+        # install.py --status would never show that the updates keep failing.
+        oldest = min(path.stat().st_mtime for path in present)
+        os.utime(index, (oldest, oldest))
     print(f"compiled {index}: " + (", ".join(f"{k} +{v}" for k, v in counts.items()) or "nothing cached"))
     found = lists.Lists(index=index)
     for host in CRITICAL_HOSTS:

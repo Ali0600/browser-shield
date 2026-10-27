@@ -18,14 +18,27 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+# The copy as Claude Code names it (~/.local/share/browser-shield/current, not the release it resolves to), for
+# commands quoted in messages: they stay right after the next install.
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UPDATE = f"/usr/bin/python3 -I {os.path.join(HERE, 'scripts', 'update_lists.py')}"
 # The log and the once-per-session markers; tests point this elsewhere so they never write the live log.
 STATE_DIR = os.environ.get("BROWSER_SHIELD_STATE_DIR") or os.path.join(ROOT, "cache")
 LOG = os.path.join(STATE_DIR, "guard.log")
 LOG_LIMIT = 1_000_000
 STALE_AFTER = 8 * 86400  # seconds; the lists are rebuilt daily to every few hours upstream
-# A shell command without one of these words cannot match a SHELL_LURES rule in browser_shield/policy.py, so the hook
-# answers it without loading anything (it runs on every Bash call). tests/test_policy.py pins the two together.
-SHELL_WORDS = re.compile(r"curl|wget|base64|xattr|spctl|installer|hdiutil")
+# A shell command without one of these words cannot match a SHELL_LURES rule or hand a URL to a browser (OPENERS) in
+# browser_shield/policy.py, so the hook answers it without loading anything (it runs on every Bash call).
+# tests/test_policy.py pins these words to both. BROWSER stays upper case: lower case matches this repo's own paths.
+# `open(` is Python's file open (in 13,000 transcript calls), never the command, so it does not load the policy.
+SHELL_WORDS = re.compile(r"curl|wget|base64|xattr|spctl|installer|hdiutil|\bopen\b(?!\()|BROWSER|webbrowser|osascript")
+QUOTING = re.compile(r"[\"'\\]")
+
+
+def shell_words_in(command: str) -> bool:
+    """Whether a shell rule might apply: also with quotes and backslashes removed, since sh reads `o''pen` and
+    `o\\pen` as the plain word."""
+    return bool(SHELL_WORDS.search(command) or SHELL_WORDS.search(QUOTING.sub("", command)))
 
 
 def log(entry: dict) -> None:
@@ -71,14 +84,16 @@ def deny(reason: str) -> dict:
 def pre_tool_use(event: dict) -> dict:
     tool, tool_input = event.get("tool_name", ""), event.get("tool_input")
     if tool in ("Bash", "mcp__terminal__run_in_terminal") and isinstance(tool_input, dict) \
-            and not SHELL_WORDS.search(str(tool_input.get("command", ""))):
+            and not shell_words_in(str(tool_input.get("command", ""))):
         return {}
     try:
         from browser_shield import leaks, policy
         from browser_shield.lists import Lists
 
         shell = policy.short_name(str(tool))[0] == "shell"
-        lists = None if shell else Lists()  # shell rules read no list: a list problem must not touch Bash
+        # Shell rules read the lists only for a command that opens a URL (policy.evaluate loads them then), so a
+        # list problem never touches an ordinary Bash call.
+        lists = None if shell else Lists()
         ctx = policy.Context(roots=(event.get("cwd"), event.get("scratchpad_dir")))
         verdict = policy.evaluate(tool, tool_input, lists, ctx)
         updated = policy.rewrite(tool, tool_input) if verdict.decision != policy.DENY else None
@@ -89,7 +104,7 @@ def pre_tool_use(event: dict) -> dict:
         what = f"{type(exc).__name__}: {safe_text(str(exc))[:200]}"
         log({"event": "PreToolUse", "tool": tool, "decision": "deny", "reasons": [f"guard error {what}"]})
         return deny(f"browser-shield: the guard failed on this call ({what}) and refuses it; "
-                    "the guard's code needs a fix (~/projects/automation/browser-shield)")
+                    f"the guard's code needs a fix ({os.path.join(HERE, 'hooks', 'guard.py')})")
     out: dict = {}
     if verdict.decision != policy.ALLOW:
         log({"event": "PreToolUse", "tool": tool, "decision": verdict.decision, "reasons": reasons})
@@ -102,7 +117,7 @@ def pre_tool_use(event: dict) -> dict:
         log({"event": "PreToolUse", "tool": tool, "decision": "rewrite", "reasons": ["browserShield() expanded"]})
         out["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "updatedInput": updated}
     if policy.short_name(str(tool))[1] in ("navigate", "preview_start", "browser_batch", "WebFetch"):
-        update = "/usr/bin/python3 -I ~/projects/automation/browser-shield/scripts/update_lists.py"
+        update = UPDATE
         session = event.get("session_id", "")
         if lists.index_error and once_per_session(session, "index-error"):
             out["systemMessage"] = (f"browser-shield: the downloaded blocklist index cannot be read ({lists.index_error}); "
@@ -114,7 +129,8 @@ def pre_tool_use(event: dict) -> dict:
                 and once_per_session(session, "stale-index"):
             days = int((time.time() - os.path.getmtime(lists.index)) // 86400)
             out["systemMessage"] = (f"browser-shield: the malware and phishing lists are {days} days old (phishing "
-                                    f"domains live for days). Run: {update}")
+                                    "domains live for days), so the weekly update has not run or keeps failing "
+                                    f"(~/Library/Logs/browser-shield-update-lists.log). Run: {update}")
     return out
 
 

@@ -43,8 +43,8 @@ The hooks live in `~/.claude/settings.json` (user scope, so every project's sess
 
 ```json
 "PreToolUse": [{
-  "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|javascript_tool|computer|form_input|file_upload|upload_image|gif_creator)$|^WebFetch$|^Bash$|^mcp__terminal__run_in_terminal$",
-  "hooks": [{"type": "command", "command": "/usr/bin/python3 -I $HOME/.local/share/browser-shield/current/hooks/guard.py", "timeout": 10}]
+  "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|javascript_tool|computer|form_input|file_upload|upload_image|gif_creator|shortcuts_execute)$|^WebFetch$|^Bash$|^mcp__terminal__run_in_terminal$",
+  "hooks": [{"type": "command", "command": "/usr/bin/python3 -I $HOME/.local/share/browser-shield/current/hooks/guard.py", "timeout": 10, "onFailure": "block"}]
 }],
 "PostToolUse": [{
   "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|get_page_text|read_page|find|javascript_tool)$|^WebFetch$",
@@ -52,7 +52,13 @@ The hooks live in `~/.claude/settings.json` (user scope, so every project's sess
 }]
 ```
 
-Claude Code picks up an edit to that file in running sessions. To switch the shield off, delete those two entries.
+Claude Code picks up an edit to that file in running sessions. `"onFailure": "block"` (Claude Code 2.1.295 or
+later) makes a guard that crashes or runs past its 10 s refuse the call instead of letting it through unchecked;
+the guard's own errors already refuse the call they hit, so this covers the interpreter failing to start, a crash
+before the guard's own handling, and a timeout. It is on PreToolUse only: a PostToolUse failure has nothing left to
+refuse. The price: a broken install refuses every Bash and browser call until it is fixed. `install.py` smoke-tests
+each copy before sessions get it, and the hook entries can still be edited by hand, since Claude's Edit tool is not
+guarded. To switch the shield off, delete those two entries.
 Cost, measured: about 84 ms on each shell command (most return before the policy loads) and 125 ms on each guarded
 browser call.
 
@@ -137,10 +143,19 @@ page/shield.js ── runs inside the page: YouTube ad skipper, click / navigati
   way past the guard); unreadable hook input from Claude Code itself, or a PostToolUse error, is let through with a
   warning. A damaged list index falls back to the curated lists and says so.
 
-Not covered: a click (`computer`) that navigates onto YouTube is followed by neither the reminder nor the mod; a URL
-a shell tool hands to the pane through the desktop app's `$BROWSER` shim skips the MCP tools and so the hook;
-Chrome's `shortcuts_execute` runs an agent the hook never sees; secrets the agent builds at run time inside a script
-are invisible to a text check; a look-alike domain (Cyrillic `е`) is a different domain, caught only if a list names
+Shell commands that open a browser are judged like a navigate: `open` (a URL after `--args` too, which a browser
+app opens), `xdg-open`, Python's `webbrowser`, AppleScript's `open location` and JXA's `openLocation`, and the
+desktop app's `$BROWSER` shim (which opens the Browser pane). They are found after `;`, `&&`, `|`, wrappers (`env`,
+`sudo`, `exec`, `time`, …), inside `sh -c`, `eval`, `env -S` and `do shell script`, in text fed to a shell
+(`bash <<< …`, `echo … | sh`), in `echo URL | xargs open`, and with their words split by quotes (`o''pen`). The
+system openers are judged on http(s) URLs only, so `open roblox://…`, files and app launches stay the user's
+business; `$BROWSER` gets every rule a navigate does. A quoted here-document fed to anything but a shell is data.
+Chrome's `shortcuts_execute`, which runs a saved shortcut as an agent the hook never sees, asks first.
+
+Not covered: a click (`computer`) that navigates onto YouTube is followed by neither the reminder nor the mod; a
+program that opens a browser from its own code (a script file, `node -e`) is not read, nor is an opener or URL held
+in a shell variable (`open "$URL"`); a lure whose words are split by quotes (`cu''rl … | sh`) is not asked about;
+secrets the agent builds at run time inside a script are invisible to a text check; a look-alike domain (Cyrillic `е`) is a different domain, caught only if a list names
 it; whether the Mac's hooks run for cloud sessions (`mcp__remote-devices__…`) is unknown. The page script runs in
 the page's own world after the page's code, so a hostile page can undo it: it stops accidents and ads, and the hook
 is the boundary.
@@ -163,18 +178,22 @@ is the boundary.
 
 ## Experience Gained
 
-- Wrote a Claude Code PreToolUse/PostToolUse hook in stdlib Python that judges 12 browser, shell and fetch tools
+- Wrote a Claude Code PreToolUse/PostToolUse hook in stdlib Python that judges 13 browser, shell and fetch tools
   with deny, ask or rewrite decisions; verified live in the desktop app, at 84 ms a shell call after cutting import
   time from 166 ms.
-- Replayed 122,697 real tool calls from 2,816 transcripts through the policy, found 40 false positives on real
-  work, and fixed them down to one, without dropping a correct catch.
+- Built a replay tool that runs every tool call in this Mac's Claude Code transcripts (130,589 unique calls from
+  3,084 files, de-duplicated across forks) through two versions of the guard and lists each verdict that moves;
+  replays cut 40 false positives on real work to one and showed the new shell-opener rule moves none.
 - Built a WHATWG and UTS 46 URL host parser in Python, differential-tested against Node's parser on all 1.1 million
   Unicode code points; the sweep closed 251 characters that let a browser reach a host the guard misread.
 - Shipped an in-page YouTube ad skipper measured live on 3 videos: pre-rolls up to 135 s and ad pods of up to three
   ads cleared in under 2 seconds each, with the viewer's sound restored.
-- Ran two adversarial reviews (5 hunters, then 4 lenses with 2 refuters per finding over 48 agents) and fixed,
-  documented or refuted each of their 66 findings, among them a forged-status path that let a page write into
-  Claude's context; covered the code with 112 Python, 47 Node and 10 plugin-engine tests and a mutation harness of
-  129 deliberate bugs, each required to turn a named test red.
+- Ran three adversarial reviews (5 hunters; 4 lenses with 2 refuters per finding; 4 hunters with a skeptic each)
+  and fixed, documented or refuted every finding, among them a forged-status path that let a page write into
+  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 167 Python, 47 Node and
+  10 plugin-engine tests and a mutation harness of 191 deliberate bugs, each required to turn a named test red.
 - Designed a secret-exfiltration guard: 14 vendor token patterns, a linear-time JWT scan, Luhn plus card-network
   checks with 47 published test cards allowed, and redaction of every log line and refusal message.
+- Deployed it like a service: each commit gated again inside its own pinned release, smoke-tested as Claude Code
+  runs it and swapped in by one atomic rename; a launchd job refreshes 298,397 threat-list domains weekly, and the
+  hook entries fail closed when the guard cannot run.

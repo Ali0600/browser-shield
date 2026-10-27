@@ -225,6 +225,15 @@ class Smoke(Temp):
         with self.assertRaisesRegex(install.InstallError, "did not deny the ad host ads.example"):
             install.smoke(release, self.tmp / "data")
 
+    def test_smoke_refuses_a_copy_that_refuses_every_page(self):
+        # A guard that crashes on every browser call refuses them all ("the guard failed"): it denies the ad host
+        # too, and lets `ls` through on its fast path, so only the ordinary page shows it is broken.
+        guard = ("import json, sys\nevent = json.loads(sys.stdin.read())\n"
+                 "print('{}' if event.get('tool_name') == 'Bash' else json.dumps({'hookSpecificOutput': "
+                 "{'hookEventName': 'PreToolUse', 'permissionDecision': 'deny'}}))\n")
+        with self.assertRaisesRegex(install.InstallError, "did not let https://example.com/ through"):
+            install.smoke(fake_release(self.tmp, guard=guard), self.tmp / "data")
+
     def test_smoke_refuses_a_hook_that_crashes(self):
         release = fake_release(self.tmp, guard="raise SystemExit(3)\n")
         with self.assertRaisesRegex(install.InstallError, "exited 3"):
@@ -256,6 +265,30 @@ class Settings(Temp):
         self.assertFalse(install.runs_installed(old, root))
         self.assertTrue(install.runs_installed(new, root))
         self.assertEqual(install.hook_commands(self.tmp / "absent.json"), [])
+
+    def report(self, pre_matcher=None, on_failure="block", post=True, post_matcher="^WebFetch$", post_block=False) -> bool:
+        root = self.tmp / "install"
+        command = f"/usr/bin/python3 -I {root}/current/hooks/guard.py"
+        hooks = {}
+        if pre_matcher is not None:
+            entry = {"type": "command", "command": command, **({"onFailure": on_failure} if on_failure else {})}
+            hooks["PreToolUse"] = [{"matcher": pre_matcher, "hooks": [entry]}]
+        if post:
+            post_hook = {"type": "command", "command": command, **({"onFailure": "block"} if post_block else {})}
+            hooks["PostToolUse"] = [{"matcher": post_matcher, "hooks": [post_hook]}]
+        settings = self.tmp / "settings.json"
+        settings.write_text(json.dumps({"hooks": hooks}))
+        with mock.patch.object(install, "SETTINGS", settings):
+            return quietly(install.report_hooks, root)
+
+    def test_status_needs_a_blocking_pre_tool_use_entry_on_bash_and_browsers(self):
+        matcher = "^mcp__(Claude_Browser|claude-in-chrome)__(navigate|computer)$|^WebFetch$|^Bash$"
+        self.assertTrue(self.report(matcher))
+        self.assertFalse(self.report(None), "only the PostToolUse entry left: nothing is refused")
+        self.assertFalse(self.report(None, post_matcher=matcher, post_block=True),
+                         "a PostToolUse entry refuses nothing, whatever it matches")
+        self.assertFalse(self.report("^NotebookEdit$"), "a PreToolUse entry that never sees Bash or navigate")
+        self.assertFalse(self.report(matcher, on_failure=None), "without onFailure a crashed guard lets calls through")
 
 
 class Job(Temp):
@@ -317,6 +350,21 @@ class EndToEnd(Temp):
         with mock.patch.object(install, "run_gate") as gate:
             self.assertEqual(self.run_install(), 0)
         gate.assert_not_called()
+
+    def test_a_removal_cut_short_is_never_reused(self):
+        self.assertEqual(self.run_install(), 0)
+        release = self.root / "releases" / install.clean_commit(self.repo)[:12]
+        (self.root / "current").unlink()  # as if another release were current while this one was pruned
+        with mock.patch.object(install.shutil, "rmtree", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                install.remove_tree(release)
+        self.assertFalse(release.exists(), "a half-removed release still carries its name")
+        with mock.patch.object(install, "run_gate") as gate:
+            self.assertEqual(self.run_install(), 0)
+        gate.assert_called_once()
+        self.assertTrue((self.root / "current" / "scripts" / "x.py").is_file())
+        self.assertEqual([p.name for p in (self.root / "releases").iterdir() if p.name.startswith(".")], [],
+                         "prune sweeps the leftover")
 
     def test_failed_gate_changes_nothing(self):
         with self.assertRaisesRegex(install.InstallError, "gate step `/usr/bin/false` failed"):

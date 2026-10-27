@@ -26,6 +26,7 @@ import io
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -169,6 +170,12 @@ def set_writable(tree: Path, writable: bool) -> None:
 
 
 def remove_tree(tree: Path) -> None:
+    """Rename the folder to a dot-name first: a removal cut short leaves a leftover prune() sweeps, never a release
+    with its marker but half its files, which a later install of that commit would reuse."""
+    if not tree.name.startswith("."):
+        doomed = tree.with_name(f".{tree.name}-removing-{os.getpid()}")
+        os.rename(tree, doomed)
+        tree = doomed
     os.chmod(tree, 0o755)
     set_writable(tree, True)
     shutil.rmtree(tree)
@@ -236,6 +243,8 @@ def smoke(release: Path, data: Path) -> list[str]:
             raise InstallError("the copy's hook did not let a plain `ls` through silently")
         out = run_hook(release, {**base, "tool_name": "mcp__Claude_Browser__navigate",
                                  "tool_input": {"url": "https://example.com/"}}, Path(tmp))
+        if out.get("hookSpecificOutput", {}).get("permissionDecision"):
+            raise InstallError(f"the copy's hook did not let https://example.com/ through: {json.dumps(out)[:300]}")
         message = out.get("systemMessage", "")
         if (data / "blocklist.sqlite").exists():
             if "not installed" in message or "cannot be read" in message:
@@ -279,6 +288,12 @@ def prune(install: Path, keep: int = KEEP) -> list[str]:
 
 def hook_commands(settings: Optional[Path] = None) -> list[tuple[str, str]]:
     """(event, command) for every hook in settings.json that runs a browser-shield guard.py."""
+    return [(event, command) for event, command, _, _ in hook_entries(settings)]
+
+
+def hook_entries(settings: Optional[Path] = None, root: Optional[Path] = None) -> list[tuple[str, str, str, str]]:
+    """(event, command, matcher, onFailure) for every hook in settings.json that runs a browser-shield guard.py, or
+    the guard installed under root (an install folder named otherwise)."""
     try:
         config = json.loads((settings or SETTINGS).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -288,8 +303,8 @@ def hook_commands(settings: Optional[Path] = None) -> list[tuple[str, str]]:
         for group in groups or []:
             for hook in group.get("hooks") or []:
                 command = str(hook.get("command", ""))
-                if "browser-shield" in command and "guard.py" in command:
-                    out.append((event, command))
+                if "guard.py" in command and ("browser-shield" in command or (root and runs_installed(command, root))):
+                    out.append((event, command, str(group.get("matcher", "")), str(hook.get("onFailure", ""))))
     return out
 
 
@@ -347,17 +362,30 @@ def install(repo: Path = REPO, root: Path = INSTALL) -> int:
     return 0
 
 
-def report_hooks(root: Path) -> bool:
-    commands = hook_commands()
-    if not commands:
-        print(f"WARN   no browser-shield hook in {SETTINGS}")
+def guards_calls(matcher: str) -> bool:
+    """The entry's matcher covers a shell call and a browser navigation (an empty matcher matches every tool)."""
+    try:
+        return all(re.search(matcher, tool) for tool in ("Bash", "mcp__Claude_Browser__navigate")) if matcher else True
+    except re.error:
         return False
+
+
+def report_hooks(root: Path) -> bool:
+    """True only when a PreToolUse entry runs the installed guard on Bash and browser calls, refusing a call when it
+    fails to run, and every browser-shield entry runs the installed copy."""
+    entries = hook_entries(None, root)
     good = True
-    for event, command in commands:
+    for event, command, matcher, on_failure in entries:
         ok = runs_installed(command, root)
         good &= ok
         print(("ok     " if ok else "WARN   ") + f"{event} runs {command}"
               + ("" if ok else f" (not the installed copy: point it at {root / 'current' / 'hooks' / 'guard.py'})"))
+    pre = [e for e in entries if e[0] == "PreToolUse" and runs_installed(e[1], root) and guards_calls(e[2])]
+    if not [e for e in pre if e[3] == "block"]:
+        print(f"WARN   no PreToolUse entry in {SETTINGS} runs the installed guard on Bash and browser calls: nothing "
+              "is refused" if not pre else 'WARN   the PreToolUse entry lacks "onFailure": "block": a guard that '
+              "fails to run lets the call through")
+        return False
     return good
 
 
@@ -447,7 +475,7 @@ def status(root: Path = INSTALL) -> int:
     index = root / "data" / "blocklist.sqlite"
     if index.exists():
         days = (time.time() - index.stat().st_mtime) / 86400
-        print(f"lists: compiled {days:.1f} days ago ({index})")
+        print(f"lists: {days:.1f} days since the oldest source last downloaded ({index})")
     else:
         print("lists: not downloaded yet")
     print("local lists: " + (", ".join(n for n in LOCAL_LISTS if (root / "data" / "local" / n).is_file()) or "none"))

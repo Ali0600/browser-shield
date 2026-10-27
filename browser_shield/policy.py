@@ -214,8 +214,10 @@ def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict, depth: i
         m = re.match(r"^chrome-extension://([a-p]{32})(?:[/?#]|$)", t.url, re.I)
         if m and m.group(1).lower() in lists.extensions:
             return  # the user's own extension, listed in lists/extensions.local.txt
+        # Named where it really is: in an installed copy lists/ holds a link into data/local/.
+        local = os.path.realpath(os.path.join(str(lists.lists_dir), "extensions.local.txt"))
         v.raise_to(ASK, f"{where}: {t.url[:60]} is a browser or extension page (it can change settings or approve "
-                        "what an extension does); add your own extensions' ids to lists/extensions.local.txt")
+                        f"what an extension does); add your own extensions' ids to {local}")
         return
     if t.scheme not in SCHEMES_OK:
         if t.url.lower() == "about:blank":
@@ -314,6 +316,287 @@ def check_shell(command: Any, where: str, v: Verdict) -> None:
                             "the user decides")
 
 
+# Shell commands that hand a URL to a browser. macOS `open`, xdg-open, Python's webbrowser and AppleScript's
+# `open location` reach the user's default browser, signed in as the user; $BROWSER is the desktop app's shim, which
+# opens the Browser pane. Without this a URL refused as a navigate walked through a shell. hooks/guard.py's
+# SHELL_WORDS must hold each word (tests/test_policy.py pins the two).
+OPENERS = ("open", "xdg-open", "webbrowser", "osascript", "BROWSER")
+_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# Words that run the command after them, each with its options that take a value. Shell keywords that start a
+# command (`if open …; then`, `{ open …; }`) count as wrappers too.
+_WRAPPERS = {
+    "env": {"-u", "--unset", "-P", "-C", "--chdir"}, "sudo": {"-u", "-g", "-C", "-h", "-p", "-U", "-r", "-t", "-T", "-D"},
+    "command": set(), "builtin": set(), "exec": {"-a"}, "nohup": set(), "time": set(), "caffeinate": {"-w", "-t"},
+    "nice": {"-n"}, "!": set(), "{": set(), "if": set(), "then": set(), "else": set(), "elif": set(),
+    "while": set(), "until": set(), "do": set(),
+}
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+_OPEN_LOCATION = re.compile(r"\bopen\s+location\s+\"([^\"]+)\"", re.I)
+_OPEN_LOCATION_JS = re.compile(r"\bopenLocation\s*\(\s*([\"'`])(.+?)\1")
+_DO_SHELL_SCRIPT = re.compile(r"\bdo\s+shell\s+script\s+\"((?:[^\"\\]|\\.)*)\"", re.I)
+_WEBBROWSER_CALL = re.compile(r"\bwebbrowser\.open(?:_new|_new_tab)?\s*\(\s*([\"'])(.+?)\1")
+_SHELL_PUNCTUATION = set(";&|()<>\n")
+_REDIRECTS = {">", ">>", "<", ">&", "<&", "&>", "&>>", ">|", "<>"}  # not here-documents (<<, <<<)
+_PORT_EXPANSION = re.compile(r":(\$\w+|\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`)(?=[/?#]|$)")
+_WEB_SCHEME = re.compile(r"^\s*https?:", re.I)
+# For a line sh could not split (an unclosed quote) or nested too deep: an http(s) URL after an opener word on the
+# same simple command, read with quotes removed (`o''pen` is `open` to sh).
+_OPENER_THEN_URL = re.compile(r"(?:\bopen\b|\bwebbrowser\b|\$\{?BROWSER\b)[^\n;&|]*?([hH][tT][tT][pP][sS]?://[^\s'\"<>|;&)`]+)")
+_QUOTING = re.compile(r"[\"'\\]")
+_IFS = re.compile(r"\$\{?IFS\}?")
+# A here-document: <<EOF, <<-EOF, <<'EOF' or <<"EOF" (not a <<< here-string).
+_HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+_PIPE_TO_SHELL = re.compile(r"\|\s*(?:\S*/)?(?:sudo\s+(?:-\S+\s+)*)?(?:\S*/)?(?:ba|z|da|k)?sh\b")
+MAX_DEPTH = 3  # sh -c, eval, env -S and do shell script, nested; deeper is judged by the fallback
+
+
+def _consumer(before: str) -> str:
+    """The program a here-document on this line feeds: the first word of the last simple command before `<<`."""
+    words = re.split(r"[;&|(]", before)[-1].split()
+    words = [w for w in words if not _ASSIGNMENT.match(w)]
+    while words and os.path.basename(words[0]) in _WRAPPERS:
+        words = [w for w in words[1:] if not w.startswith("-")]
+    return os.path.basename(words[0]) if words else ""
+
+
+def _unquoted_heredocs(line: str, quote: str) -> tuple:
+    """(the here-document operators on this line outside quotes and comments, the quote still open at its end).
+    `<<'EOF'` inside a string or after `#` starts no here-document, so it cannot hide the lines after it."""
+    ops, i = [], 0
+    while i < len(line):
+        c = line[i]
+        if quote == "'":
+            quote = "" if c == "'" else quote
+        elif quote == '"':
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                quote = ""
+        elif c == "\\":
+            i += 1
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;&|()<>"):
+            break
+        elif c == "<":
+            m = _HEREDOC.match(line, i)
+            if m:
+                ops.append(m)
+                i = m.end()
+                continue
+        i += 1
+    return ops, quote
+
+
+def _drop_data_heredocs(command: str) -> str:
+    """The command with here-document bodies that only a non-shell program reads set aside: `cat > f <<'EOF'` writes
+    text and `python3 - <<'EOF'` feeds a program, so an `open https://…` line inside either is data. A body a shell
+    reads (`bash <<'EOF'`, `cat <<'EOF' | sh`) runs line by line and stays, as does one that never ends (read as
+    commands: fail closed); an unquoted body fed to a program keeps only its lines with a `$(…)` or backtick, the
+    part that runs."""
+    lines, out, i, quote = command.split("\n"), [], 0, ""
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        ops, quote = _unquoted_heredocs(line, quote)
+        for m in ops:
+            dash, quoted, delim = m.groups()
+            body, closed = [], False
+            while i < len(lines):
+                if (lines[i].lstrip("\t") if dash else lines[i]) == delim:
+                    closed = True
+                    break
+                body.append(lines[i])
+                i += 1
+            if not closed or _consumer(line[:m.start()]) in _SHELLS or _PIPE_TO_SHELL.search(line[m.end():]):
+                out += body
+            elif not quoted:
+                out += [b for b in body if "$(" in b or "`" in b]
+            if closed:
+                out.append(lines[i])
+                i += 1
+    return "\n".join(out)
+
+
+def _shell_segments(command: str) -> list:
+    """The command line split into simple commands, each with the operator that ends it (`;`, `|`, `&&`, `<<<`,
+    a newline, or "" at the end), words unquoted as sh would. A redirection does not end the command: its target is
+    no argument (`open >/dev/null URL` hands the URL to open), nor is the descriptor number before it (`2>`)."""
+    import shlex
+
+    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    lex.commenters = ""
+    segments, words, target_next = [], [], False
+    for token in lex:
+        punct = bool(token) and set(token) <= _SHELL_PUNCTUATION
+        if target_next and not punct:
+            target_next = False
+            continue
+        target_next = False
+        if token in _REDIRECTS:
+            if words and words[-1].isdigit():
+                words.pop()
+            target_next = True
+        elif punct:
+            if words:
+                segments.append((words, token))
+            words = []
+        else:
+            words.append(token)
+    if words:
+        segments.append((words, ""))
+    return segments
+
+
+def _command_start(words: list) -> tuple:
+    """(index of the command word, or the command line an `env -S` names) once assignments and wrappers are read."""
+    i = 0
+    while True:
+        while i < len(words) and _ASSIGNMENT.match(words[i]):
+            i += 1
+        if i >= len(words):
+            return i, None
+        flags = _WRAPPERS.get(os.path.basename(words[i].lstrip("`")))
+        if flags is None:
+            return i, None
+        i += 1
+        while i < len(words) and words[i].startswith("-") and words[i] not in ("-", "--"):
+            if words[i] in ("-S", "--split-string") and i + 1 < len(words):
+                return len(words), " ".join(words[i + 1:])
+            i += 2 if words[i] in flags else 1
+        if i < len(words) and words[i] == "--":
+            i += 1
+
+
+def _command_name(words: list) -> str:
+    i, _ = _command_start(words)
+    return os.path.basename(words[i].lstrip("`")) if i < len(words) else ""
+
+
+def _is_browser_shim(word: str) -> bool:
+    return word in ("$BROWSER", "${BROWSER}") or word.startswith("${BROWSER:") or (
+        bool(os.environ.get("BROWSER")) and word == os.environ.get("BROWSER"))
+
+
+def _open_args(args: list) -> list:
+    """What `open` or xdg-open is handed: operands, -u/--url values, and every word after --args, which the
+    launched app receives and a browser opens. An option's value (an app name, a bundle id) is listed too and
+    costs nothing: only an http(s) URL is judged."""
+    out, j = [], 0
+    while j < len(args):
+        a = args[j]
+        if a == "--args":
+            out += [(b, False) for b in args[j + 1:]]
+            break
+        if a in ("-u", "--url"):
+            out += [(args[j + 1], False)] if j + 1 < len(args) else []
+            j += 2
+            continue
+        if a.startswith("--url="):
+            out.append((a[len("--url="):], False))
+        elif a.startswith("-u") and not a.startswith("--"):
+            out.append((a[2:], False))
+        elif not a.startswith("-") or a == "-":
+            out.append((a, False))
+        j += 1
+    return out
+
+
+def _opened_by(words: list, depth: int) -> list:
+    """(target, pane) for each URL one simple command hands to a browser; pane is True for $BROWSER."""
+    i, split = _command_start(words)
+    if split is not None:
+        return shell_targets(split, depth + 1)
+    if i >= len(words):
+        return []
+    word, args = words[i].lstrip("`"), [a.rstrip("`") for a in words[i + 1:]]
+    base = os.path.basename(word)
+    out = []
+    if base in _SHELLS:
+        for j, a in enumerate(args[:-1]):
+            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):  # -c, -lc, -ec: the next word is a command line
+                out += shell_targets(args[j + 1], depth + 1)
+                break
+    elif base == "eval":
+        out += shell_targets(" ".join(args), depth + 1)
+    elif base in ("open", "xdg-open"):
+        out += _open_args(args)
+    elif base.startswith("python"):
+        if args[:2] == ["-m", "webbrowser"]:
+            out += [(a, False) for a in args[2:] if not a.startswith("-")]
+        for j, a in enumerate(args[:-1]):
+            if a == "-c":
+                out += [(m.group(2), False) for m in _WEBBROWSER_CALL.finditer(args[j + 1])]
+    elif base == "osascript":
+        for j, a in enumerate(args[:-1]):
+            if a == "-e":
+                script = args[j + 1]
+                out += [(m.group(1), False) for m in _OPEN_LOCATION.finditer(script)]
+                out += [(m.group(2), False) for m in _OPEN_LOCATION_JS.finditer(script)]
+                for m in _DO_SHELL_SCRIPT.finditer(script):
+                    out += shell_targets(m.group(1).replace('\\"', '"').replace("\\\\", "\\"), depth + 1)
+    elif _is_browser_shim(word):
+        out += [(a, True) for a in args if not a.startswith("-")]
+    return out
+
+
+def shell_targets(command: Any, depth: int = 0) -> list:
+    """(target, pane) for every URL the command line hands to a browser, also through text it feeds a shell
+    (`bash <<< '…'`, `echo '…' | sh`) and `echo URL | xargs open`. A line too odd to split as sh would (an unclosed
+    quote), or nested deeper than MAX_DEPTH, still gives up its URLs after an opener word: unreadable is no way past."""
+    if not isinstance(command, str):
+        return []
+    text = _IFS.sub(" ", command)
+    if not any(w in text or w in _QUOTING.sub("", text) for w in OPENERS):
+        return []
+    if depth > MAX_DEPTH:
+        return [(u, False) for u in _OPENER_THEN_URL.findall(_QUOTING.sub("", text))]
+    text = _drop_data_heredocs(text)
+    try:
+        segments = _shell_segments(text)
+    except ValueError:
+        return [(u, False) for u in _OPENER_THEN_URL.findall(_QUOTING.sub("", text))]
+    out = []
+    for k, (words, sep) in enumerate(segments):
+        out += _opened_by(words, depth)
+        following = segments[k + 1][0] if k + 1 < len(segments) else []
+        name = _command_name(words)
+        if sep == "<<<" and name in _SHELLS and following:
+            out += shell_targets(following[0], depth + 1)
+        elif sep == "|" and name in ("echo", "printf") and following:
+            fed = words[_command_start(words)[0] + 1:]
+            consumer = _command_name(following)
+            if consumer in _SHELLS:
+                out += shell_targets(" ".join(fed), depth + 1)
+            elif consumer == "xargs" and any(os.path.basename(w) in ("open", "xdg-open") for w in following):
+                out += [(w, False) for w in fed]
+    return out
+
+
+def judged_targets(command: Any) -> list:
+    """The (target, pane) pairs a navigate's verdict applies to. The system openers are judged on http(s) URLs only:
+    an app's own scheme (`open roblox://…`), a file or an app launch is the user's business, as in Terminal. The
+    Browser pane's shim is judged on everything, as a navigate is."""
+    out = []
+    for target, pane in shell_targets(command):
+        if not isinstance(target, str):
+            continue
+        # A port the shell fills in (`localhost:$PORT`) is judged as a port; the host and path still are.
+        target = _PORT_EXPANSION.sub(":1", target)
+        if pane or _WEB_SCHEME.match(urls.preprocess(target)):
+            out.append((target, pane))
+    return out
+
+
+def check_shell_targets(targets: list, lists: Lists, where: str, v: Verdict, ctx: Context = NO_CONTEXT) -> None:
+    for target, pane in targets:
+        how = f"$BROWSER opens {target[:60]} in the Browser pane" if pane else f"opens {target[:60]} in the default browser"
+        v.absorb(check_url(target, lists, f"{where} ({how})", 0, ctx))
+
+
 def is_shield(text: Any) -> bool:
     """The shield call, or the page script it expands to: PostToolUse sees the input after the guard's rewrite."""
     return isinstance(text, str) and (
@@ -335,6 +618,9 @@ def evaluate(tool_name: str, tool_input: Any, lists: Optional[Lists] = None, ctx
         return v
     if browser == "shell":
         check_shell(tool_input.get("command"), tool, v)
+        targets = judged_targets(tool_input.get("command"))
+        if targets:  # the lists are read only for a command that opens a URL (FP-6: a list problem never touches Bash)
+            check_shell_targets(targets, lists if lists is not None else Lists(), tool, v, ctx)
         return v
     lists = lists if lists is not None else Lists()
     if tool == "browser_batch":
@@ -362,6 +648,11 @@ def _check_action(tool: str, inp: dict, lists: Lists, where: str, v: Verdict, ct
         check_text(inp.get("value"), where, v)
     elif tool in ("file_upload", "upload_image"):
         v.raise_to(ASK, f"{where}: uploads a file from this Mac to a web page; the user decides")
+    elif tool == "shortcuts_execute":
+        name = next((inp[k] for k in ("command", "shortcutId") if isinstance(inp.get(k), str) and inp[k]), "")
+        check_text(inp.get("command"), where, v)
+        v.raise_to(ASK, f"{where}: runs the saved Chrome shortcut {name[:60]!r} as an agent in Chrome's side panel, "
+                        "whose steps this guard never sees; the user decides")
     elif tool == "gif_creator" and (inp.get("download") or inp.get("coordinate")):
         v.raise_to(ASK, f"{where}: exports a screen recording (an upload to the page or a download); the user decides")
 

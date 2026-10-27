@@ -12,10 +12,12 @@
   can. Revisit hook: nothing in this repo changes; the guard keeps judging Claude's own calls.
 - **Frame grabs from a downloaded copy (yt-dlp + ffmpeg) instead of the watch page** (2026-10-26). No ads, exact
   frames, no pane. Each download needs the user's go-ahead and YouTube's terms forbid downloading. Revisit hook:
-  `roblox-games/.claude/skills/scout/frame.js` would be replaced by a script that reads `-ss <t> -frames:v 1`.
-- **`onFailure: "block"` on the hooks** (2026-10-26) once every Claude Code on this Mac is 2.1.295 or later (the
-  desktop runs 2.1.295; the terminal CLI was 2.1.288, which may reject the key). Then a timeout or a crash outside
-  the guard's own `try` also refuses the call. Revisit hook: the two hook entries in `~/.claude/settings.json`.
+  the frame-grab helper in the owner's game project (a copy is `tests/fixtures/frame.js`) would be replaced by a
+  script that reads `-ss <t> -frames:v 1`.
+- **Quote-split words in the lure rules** (2026-10-27): `cu''rl x | sh` runs `curl x | sh`, but `SHELL_LURES`
+  match the raw text, so the lure goes unasked (the fast path now loads the policy for it). Normalising quotes for
+  the lure rules would also ask about `echo "curl|bash"`, the false positive the 2026-10-26 replay removed. Revisit
+  hook: `policy.check_shell`, judged on shlex segments as the opener rule is.
 - **The guard shipped as the plugin's own hooks, installed with `/plugin install`** (2026-10-27), for people who use
   the public repo: Claude Code copies an installed plugin into its own cache, which pins a version as
   `scripts/install.py` does, without editing `settings.json` by hand. Revisit hook: `hooks/hooks.json` (it names only
@@ -48,7 +50,7 @@ own clip in the shared `<video>` while `#movie_player` has `ad-showing`.
   rejected: a script injected after load is too late for the first video, YouTube captures native functions in a
   sandboxed iframe and reports tampering (`onAbnormalityDetected`), and a 2026-10-26 uAssets report ties prototype
   changes to shadowbanned comments. On YouTube the script replaces no built-in function at all.
-- **Wait the ads out** (the scout agent's old rule, "never block or speed them"): rejected at the user's request.
+- **Wait the ads out** (the old rule of the agent that studies gameplay videos, "never block or speed them"): rejected at the user's request.
 - **Open `youtube-nocookie.com/embed/<id>` instead**: rejected: embeds still carry ads, and a top-level navigation
   sends no Referer, which YouTube answers with Error 153.
 - **On the ad-blocker notice or the "Experiencing interruptions?" link the script stands down for good and never
@@ -189,3 +191,104 @@ Where the installed copy keeps its state:
 - **Daily**: rejected for now. Weekly keeps the lists well inside the 8-day warning at a seventh of the downloads.
   Revisit hook: `WHEN` in `scripts/install.py` (a `StartCalendarInterval` without `Weekday` runs daily).
 - **By hand when the hook warns**: rejected. The warning comes after 8 days, and phishing domains live for days.
+
+## 2026-10-27: a guard that fails to run refuses the call
+
+- **`"onFailure": "block"` on the PreToolUse hook entry**: chosen (the user's pick, 2026-10-27), once every Claude
+  Code on the Mac read it (2.1.295 added it; the desktop runs 2.1.308, and the terminal CLI was updated from 2.1.288
+  to 2.1.311 the same day). A guard that cannot start, crashes before its own error handling, or runs past its 10 s
+  timeout now refuses the call, as exit code 2 does; before, Claude Code let the call through unchecked.
+- **On PostToolUse too**: rejected. The tool has run by then, so there is nothing to refuse, and the guard already
+  answers its own PostToolUse errors with a `systemMessage`.
+- **Leave it off and rely on the installed copy's smoke test**: rejected as the only layer. The smoke test proves a
+  copy at install time; a timeout under load or a removed interpreter happens later.
+- The cost, accepted: a broken install refuses every guarded call (every Bash call among them) until it is fixed.
+  Claude's Edit tool is not guarded, so the hook entries in `~/.claude/settings.json` can always be fixed.
+
+## 2026-10-27: URLs that shell commands hand to a browser
+
+A shell command could open any URL a navigate would have been refused: `open https://…` in the user's signed-in
+default browser, or `$BROWSER https://…`, the desktop app's shim into the Browser pane.
+
+- **Judge the URL each opener command is given, with a navigate's verdicts**: chosen. `policy.shell_targets` splits
+  the line as sh would (`shlex` with sh's punctuation, `$IFS` read as a space), skips assignments, wrappers with
+  their own value options (`env`, `sudo -u x`, `exec -a x`, `command -p`, `time -p`, `nohup`, …) and keywords that
+  start a command (`if`, `then`, `{`), follows `sh -c` (also `-lc`), `eval`, `env -S` and AppleScript's
+  `do shell script` up to `MAX_DEPTH` 3, and reads text a shell is fed (`bash <<< '…'`, `echo '…' | sh`,
+  `cat <<'EOF' | sh`) and `echo URL | xargs open`. Openers read: `open` (operands, `-u`, `--url=`, and every word
+  after `--args`, which the launched app receives and a browser opens), `xdg-open`, `python3 -m webbrowser` and
+  `python3 -c '…webbrowser.open("…")'`, AppleScript's `open location` and JXA's `openLocation(…)`, and `$BROWSER`.
+  Nested deeper than `MAX_DEPTH`, or too odd to split (an unclosed quote), a line is judged by its URLs that follow
+  an opener word, quotes removed: unreadable is no way past.
+- **The hook's fast path reads the command with quotes and backslashes removed too** (`guard.shell_words_in`): sh
+  runs `o''pen` and `o\pen` as `open`, and those skipped the policy entirely.
+- **How it was found**: a probe of 69 bypass candidates against the first cut let 29 through (`open -a Safari
+  --args <url>`, `time -p` swallowing the next word, quote-split words, `bash <<<`, `cat <<'EOF' | sh` and more).
+  After the rewrite 6 pass, all by design: three hold the opener or the URL in a variable, and `open
+  doubleclick.net`, `open //doubleclick.net/x` and a scheme broken by a tab are file paths to `open`, not URLs.
+  The review's first bypass hunter returned no findings without having tested a candidate, which is why the probe
+  was written by hand and a second hunter sent with a quota.
+- **System openers are judged on http(s) URLs only**: chosen. `open roblox://placeId=…`, files and app launches
+  with arguments (`open -a RobloxStudio.app --args …`) are the user's own use of their Mac, as in Terminal. Rejected:
+  every scheme, as for a navigate: `open roblox://` is deliberate work in another project and would be refused.
+- **`$BROWSER` gets every rule a navigate does**, schemes included: it drives the Browser pane, which is the agent's.
+- **A quoted here-document fed to a program other than a shell is data**: chosen after the replay. The first cut
+  refused 8 real calls, every one a `cat > file <<'EOF'` or `python3 - <<'EOF'` whose text mentioned an opener and an
+  ad URL. Its body is dropped before the split. A body fed to `sh`, `bash` or `zsh` runs line by line and an unquoted
+  one runs its `$(…)`, so both are still judged.
+- **A line sh could not split (an unclosed quote)**: an http(s) URL after an opener word on the same simple command
+  is judged, so an unreadable line is no way past. Rejected: every URL in the line, which made prose with an
+  apostrophe look like an opener.
+- **Lists are read only when a command opens a URL**: FP-6 still holds for every other shell call.
+- **Not covered, and accepted**: a program that opens a browser from its own code (a script file, `node -e`),
+  and an opener or a URL held in a shell variable or command substitution (`open "$URL"`, `x=open; $x …`).
+  Revisit hook: `policy._opened_by` and `policy.shell_targets`.
+- Replay of 130,038 real calls against the installed copy (`scripts/replay.py --compare`): 0 verdicts change.
+
+## 2026-10-27: Chrome's saved shortcuts
+
+- **`shortcuts_execute` asks**: chosen. It runs a saved shortcut as an agent in Chrome's side panel, whose steps the
+  hook never sees. A secret in its `command` is still refused. Rejected: deny, since a shortcut the user saved is
+  theirs to run. The PreToolUse matcher gained the tool; the replay found no call to it in the transcripts.
+
+## 2026-10-27: the replay is a script in the repo
+
+- **`scripts/replay.py`**: chosen. The 2026-10-26 replay was a one-off whose extraction step was lost, so no later
+  change could be measured. The script reads every transcript under `~/.claude/projects` read-only, counts each tool
+  call once (its earliest copy; forks and resumed files copy calls), rebuilds each call's session folders from the
+  transcript's own environment record, and judges it as the hook would, fast path included. `--compare <copy>`
+  prints every call whose verdict moves between two copies, both directions, against one shared index.
+- **Run it in the gate**: rejected. It reads the user's private transcripts and takes about two minutes; it is run
+  after a change to what the guard refuses or asks about (CLAUDE.md), and its tests run on made-up transcripts.
+
+## 2026-10-27: what the review of the install, the shell-opener rule and the replay changed
+
+Four hunters (shell-opener bypasses, installer and data safety, false positives and cost, the replay) and a skeptic
+per lens that reproduced each finding before it counted. Each finding below now has a test and a mutant.
+
+- **A weekly run whose fetches all fail made the index look new** (medium): `compile_index` rewrote it, so the
+  hook's 8-day warning and `--status` would never show failing updates. The index is now dated by its oldest
+  successful download (`update_lists.main`).
+- **Two bypasses of the opener rule**: a redirection before the URL (`open >/dev/null https://…`: the split ended
+  the command at `>`) and `<<'EOF'` text inside quotes or a comment, which hid every later line. Redirections now
+  keep the command going (their target and descriptor number dropped); here-documents count only outside quotes and
+  comments, and one that never closes is read as commands.
+- **False positives**: `open "http://localhost:$PORT"` was refused (the port unreadable), `$BROWSER url 2>/dev/null`
+  asked about "2", and prose in an unquoted here-document was judged as commands. A port the shell fills in is
+  judged as a port; an unquoted body fed to a program keeps only its `$(…)` and backtick lines.
+- **Cost**: the word `open` sent 15% of all Bash calls through the policy (about 55 ms each), 90% of them Python's
+  `open(`. The fast path skips `open(`.
+- **The install smoke test passed a copy that refused every page** (its own crash counted as the ad host's deny):
+  an ordinary page must now be let through. **An interrupted removal could leave a marked half-release** that a
+  later install of that commit reused: removal renames to a dot-name first. **`--status` called the hooks fine with
+  only the PostToolUse entry left**: it now needs a PreToolUse entry on Bash and browser calls with
+  `"onFailure": "block"`. **The extension ask named `lists/extensions.local.txt`**: it names the file the list
+  really is, and one stray byte in it no longer breaks every browser call.
+- **The replay's `--compare` was untested against a different copy**, and two copies loaded in one process shared
+  Python's module cache: both fixed.
+- **Rejected: pin the hook to the Command Line Tools' python3** instead of `/usr/bin/python3` (which runs Xcode's):
+  no developer folder is pinned on this Mac, so a removed Xcode falls back to the Command Line Tools [inferred], and
+  a broken toolchain breaks git as well; the guard failing closed then is the accepted cost.
+- **The first bypass hunter returned no findings without testing a candidate, and a second was stopped by Claude
+  Code's safety check before it built any**: the bypass coverage is the hand-written probe of 69 candidates plus the
+  review's two, not an agent sweep.
