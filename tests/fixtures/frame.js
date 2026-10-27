@@ -1,4 +1,4 @@
-// Frame grabs from a YouTube watch page, for the game-scout agent (.claude/agents/game-scout.md).
+// Frame grabs from a YouTube watch page, for an agent that studies gameplay videos (a copy of the owner's helper).
 // Run this whole file once per page load through the Browser pane's javascript_tool, then:
 //   await scoutFrame(95)  seeks to 95 s, pauses, paints that frame over the page; take a screenshot next
 //   await scoutStoryboard(n) paints storyboard sheet n (many small frames, each labelled m:ss) to find moments fast

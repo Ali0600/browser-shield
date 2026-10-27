@@ -265,7 +265,7 @@
   }
 
   // ---- ad slots out of sight (and out of reach of a stray click) ----------------------------------------------------
-  // Fandom's (the wikis the scout and study agents read): its own <fandom-ad> element and wrappers, measured 2026-10-26.
+  // Fandom's (the game wikis research agents read): its own <fandom-ad> element and wrappers, measured 2026-10-26.
   const GENERIC_SLOTS = [
     'ins.adsbygoogle', 'iframe[src*="doubleclick.net"]', 'iframe[src*="googlesyndication.com"]',
     'iframe[id^="google_ads_iframe"]', 'div[id^="div-gpt-ad"]', 'div[id^="taboola-"]', '.OUTBRAIN',

@@ -37,6 +37,9 @@ update (a LaunchAgent, `local.browser-shield.update-lists`). Install after every
 
 ## Rules
 
+- **The repo is public** (github.com/Ali0600/browser-shield): no personal paths, transcript text, real secrets or
+  private project names in a commit or a test fixture. Test secrets are built from parts (`tests/test_leaks.py`);
+  `scripts/replay.py`'s output stays in the terminal. Commits use the GitHub noreply address.
 - **The hook runs under `/usr/bin/python3` (3.9) with `-I`, stdlib only.** No third-party imports, no syntax newer
   than 3.9 at runtime (`from __future__ import annotations` makes `X | None` hints safe). No `dataclasses`: the hook
   starts on every guarded call and import time is its cost (`python -X importtime`).
