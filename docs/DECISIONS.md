@@ -16,9 +16,10 @@
 - **`onFailure: "block"` on the hooks** (2026-10-26) once every Claude Code on this Mac is 2.1.295 or later (the
   desktop runs 2.1.295; the terminal CLI was 2.1.288, which may reject the key). Then a timeout or a crash outside
   the guard's own `try` also refuses the call. Revisit hook: the two hook entries in `~/.claude/settings.json`.
-- **A weekly launchd job running `scripts/update_lists.py`** (2026-10-26), once the user has approved the downloads.
-  Phishing domains live for days. Revisit hook: the script already keeps the last good copy and exits 1 on any
-  failure; the job needs absolute paths and a pinned `HOME`.
+- **The guard shipped as the plugin's own hooks, installed with `/plugin install`** (2026-10-27), for people who use
+  the public repo: Claude Code copies an installed plugin into its own cache, which pins a version as
+  `scripts/install.py` does, without editing `settings.json` by hand. Revisit hook: `hooks/hooks.json` (it names only
+  the mod's module today) and the README's Install.
 
 ## 2026-10-26: where Claude's ad and harm blocking can live
 
@@ -154,3 +155,37 @@ U+180F, U+2064, U+1E9E) while Python's idna codec (Unicode 3.2 tables) kept them
 - **The page script treats a site's own pages named like scripts as pages** (`github.com/x/acme.sh`), and only
   installers and executables as downloads from the same site; another site's archives and scripts stay downloads.
   Rejected: same-origin `blob:` downloads allowed (the verifier noted that is how pages smuggle a payload).
+
+## 2026-10-27: where the hooks run from: an installed copy
+
+The hooks ran `hooks/guard.py` straight from the checkout, so a save was live in every session, and a half-saved
+file crashed the hook, which Claude Code reads as a non-blocking error: the call went through unchecked.
+
+- **A pinned copy, `~/.local/share/browser-shield/current`, made by `scripts/install.py`**: chosen (the user's pick,
+  2026-10-27). It installs only a committed commit, runs the gate inside the copy, checks the copy against the
+  commit's bytes, smoke-tests the copy's hook as Claude Code runs it, and moves `current` with one rename. An edit
+  here reaches no session until it is installed.
+- **Keep running from the checkout and rely on `onFailure: "block"`**: rejected as the only fix. A half-saved file
+  would then refuse every guarded call in every session instead of letting them through: safe, but it stops all work
+  until the file is fixed. Kept as a second layer for crashes of an installed copy (below).
+- **The plugin's own hooks, installed with `/plugin install`**: deferred, see the backlog.
+
+Where the installed copy keeps its state:
+
+- **One `data/` folder that every release reaches through symlinks** (its `cache/` and the three
+  `lists/*.local.txt`): chosen. The code finds every file where it always has, so the install needed no change to
+  the live guard's code, and a download or log line survives the next install.
+- **An environment variable naming the data folder**: rejected. Both hook entries, the weekly job and every hand
+  run would have to set it, and one that forgot would quietly read an empty cache.
+- **A copy of the data in each release**: rejected. A download landing in one release would vanish at the next.
+
+## 2026-10-27: refreshing the threat lists
+
+- **A weekly LaunchAgent running the installed copy's `scripts/update_lists.py`**: chosen (the user's go,
+  2026-10-27: a local Mac job). Monday 11:00 local time; launchd starts a calendar job missed while the Mac slept at
+  the next wake (`man 5 launchd.plist`). Absolute paths and a pinned `HOME`, `LANG`, `LC_ALL` and `PATH`; each run's
+  output is stamped in `~/Library/Logs/browser-shield-update-lists.log`. A failed source keeps its last good copy and
+  the run exits 1; the hook's 8-day warning is what a person sees if failures repeat.
+- **Daily**: rejected for now. Weekly keeps the lists well inside the 8-day warning at a seventh of the downloads.
+  Revisit hook: `WHEN` in `scripts/install.py` (a `StartCalendarInterval` without `Weekday` runs daily).
+- **By hand when the hook warns**: rejected. The warning comes after 8 days, and phishing domains live for days.

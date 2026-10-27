@@ -901,5 +901,89 @@
   "old": "  on('classic.PostToolUse', { tool_name: NAV_TOOLS }, async ($, e, next) => {\n    const below = await next(e)\n",
   "new": "  on('classic.PostToolUse', { tool_name: NAV_TOOLS }, async ($, e, next) => {\n    const early = $.fs.read(`${$.plugin.root}/page/shield.js`).catch(() => '')\n    await (await early, $.tool.call({ tool: 'mcp__Claude_Browser__javascript_tool', action: 'javascript_exec', text: '0' }).catch(() => 0))\n    const below = await next(e)\n",
   "expect": "on the same tab"
+ },
+ {
+  "id": "install-dirty-ok",
+  "file": "scripts/install.py",
+  "old": "    if dirty:\n",
+  "new": "    if False:\n",
+  "expect": "test_dirty_checkout_refused"
+ },
+ {
+  "id": "install-verify-blind",
+  "file": "scripts/install.py",
+  "old": "    if extra or missing or changed:\n",
+  "new": "    if False:\n",
+  "expect": "test_copy_with_extra_or_changed_file_refused"
+ },
+ {
+  "id": "install-overwrite-data",
+  "file": "scripts/install.py",
+  "old": "if not (data / name).exists() and (cache / name).is_file():",
+  "new": "if (cache / name).is_file():",
+  "expect": "test_ensure_data_copies_once_never_overwrites"
+ },
+ {
+  "id": "install-overwrite-local",
+  "file": "scripts/install.py",
+  "old": "        if not dst.exists():\n            shutil.copy2(src, dst)",
+  "new": "        if True:\n            shutil.copy2(src, dst)",
+  "expect": "test_ensure_data_copies_once_never_overwrites"
+ },
+ {
+  "id": "install-smoke-any-decision",
+  "file": "scripts/install.py",
+  "old": "if out.get(\"hookSpecificOutput\", {}).get(\"permissionDecision\") != \"deny\":",
+  "new": "if False:",
+  "expect": "test_smoke_refuses_a_hook_that_allows_everything"
+ },
+ {
+  "id": "install-smoke-other-index",
+  "file": "scripts/install.py",
+  "old": "            if \"not installed\" in message or \"cannot be read\" in message:",
+  "new": "            if False:",
+  "expect": "test_smoke_refuses_a_copy_reading_another_index"
+ },
+ {
+  "id": "install-swap-two-steps",
+  "file": "scripts/install.py",
+  "old": "    os.replace(tmp, install / \"current\")",
+  "new": "    if os.path.lexists(install / \"current\"):\n        (install / \"current\").unlink()\n    tmp.rename(install / \"current\")",
+  "expect": "test_swap_points_current_by_one_rename"
+ },
+ {
+  "id": "install-gate-ignored",
+  "file": "scripts/install.py",
+  "old": "        if proc.returncode != 0:\n            tail = ",
+  "new": "        if False:\n            tail = ",
+  "expect": "test_failed_gate_changes_nothing"
+ },
+ {
+  "id": "install-gate-in-checkout",
+  "file": "scripts/install.py",
+  "old": "proc = subprocess.run(argv, cwd=tree,",
+  "new": "proc = subprocess.run(argv, cwd=REPO,",
+  "expect": "test_gate_runs_inside_the_copy"
+ },
+ {
+  "id": "install-chmod-follows-links",
+  "file": "scripts/install.py",
+  "old": "        for name in dirs:\n            path = os.path.join(root, name)\n            if not os.path.islink(path):\n                os.chmod(path, 0o755 if writable else 0o555)",
+  "new": "        for name in dirs:\n            path = os.path.join(root, name)\n            os.chmod(path, 0o755 if writable else 0o555)",
+  "expect": "test_set_writable_skips_symlinks"
+ },
+ {
+  "id": "install-staging-left",
+  "file": "scripts/install.py",
+  "old": "            if os.path.lexists(staging):\n                remove_tree(staging)\n            raise",
+  "new": "            raise",
+  "expect": "test_failed_gate_changes_nothing"
+ },
+ {
+  "id": "install-prune-current",
+  "file": "scripts/install.py",
+  "old": "        if current is not None and old.resolve() == current:\n            continue\n",
+  "new": "",
+  "expect": "test_prune_keeps_newest_and_current"
  }
 ]

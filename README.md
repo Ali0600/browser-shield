@@ -23,38 +23,52 @@ used to stall every visual review until it ran out. browser-shield works from th
 
 ## Install
 
+Claude Code runs an installed copy, never the checkout, so an edit in progress reaches no session. From a clean
+checkout (macOS, `/usr/bin/python3` 3.9, Node 22 and the `claude` CLI for the gate):
+
 ```bash
-cd ~/projects/automation/browser-shield && /usr/bin/python3 -I -m unittest discover -s tests -t . && node --test tests/shield.test.js
+/usr/bin/python3 -I scripts/install.py
+/usr/bin/python3 -I scripts/install.py --schedule
 ```
+
+The first command unpacks the current commit into `~/.local/share/browser-shield/releases/<commit>/` and runs the
+whole gate there. It checks the copy is the commit byte for byte and smoke-tests the copy's hook the way Claude Code
+runs it (an ad host must be denied, a plain `ls` let through). Only then does it point `current` at the copy, with
+one rename, so a hook never starts on half a copy. The three newest releases stay for a rollback. The second command
+loads a LaunchAgent (`local.browser-shield.update-lists`) that refreshes the threat lists every Monday at 11:00, or
+at the next wake if the Mac was asleep (log: `~/Library/Logs/browser-shield-update-lists.log`). `--status` shows
+what is installed, the lists' age, and what the hooks and the job run; `--unschedule` removes the job.
 
 The hooks live in `~/.claude/settings.json` (user scope, so every project's sessions get them):
 
 ```json
 "PreToolUse": [{
   "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|javascript_tool|computer|form_input|file_upload|upload_image|gif_creator)$|^WebFetch$|^Bash$|^mcp__terminal__run_in_terminal$",
-  "hooks": [{"type": "command", "command": "/usr/bin/python3 -I $HOME/projects/automation/browser-shield/hooks/guard.py", "timeout": 10}]
+  "hooks": [{"type": "command", "command": "/usr/bin/python3 -I $HOME/.local/share/browser-shield/current/hooks/guard.py", "timeout": 10}]
 }],
 "PostToolUse": [{
   "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|get_page_text|read_page|find|javascript_tool)$|^WebFetch$",
-  "hooks": [{"type": "command", "command": "/usr/bin/python3 -I $HOME/projects/automation/browser-shield/hooks/guard.py", "timeout": 10}]
+  "hooks": [{"type": "command", "command": "/usr/bin/python3 -I $HOME/.local/share/browser-shield/current/hooks/guard.py", "timeout": 10}]
 }]
 ```
 
-Claude Code picks up an edit to that file in running sessions. To switch the shield off, delete those two entries
-(a backup from before they were added is `~/.claude/settings.json.bak-2026-10-26-browser-shield`). Cost, measured:
-about 84 ms on each shell command (most return before the policy loads) and 125 ms on each guarded browser call.
+Claude Code picks up an edit to that file in running sessions. To switch the shield off, delete those two entries.
+Cost, measured: about 84 ms on each shell command (most return before the policy loads) and 125 ms on each guarded
+browser call.
 
 The malware and phishing lists (`lists/sources.json`: HaGeZi TIF mini, malware-filter's URLhaus hosts, Phishing
-Army, Peter Lowe's ad servers; about 7 MB) are downloaded into `cache/` (git-ignored) and compiled into one SQLite
-index. Until then only the curated lists in `lists/` are checked, and the hook says so once per session:
+Army, Peter Lowe's ad servers; about 7 MB) are downloaded into `~/.local/share/browser-shield/data/` and compiled
+into one SQLite index. Until then only the curated lists in `lists/` are checked, and the hook says so once per
+session. The weekly job runs the update; to run it by hand:
 
 ```bash
-/usr/bin/python3 -I ~/projects/automation/browser-shield/scripts/update_lists.py
+/usr/bin/python3 -I ~/.local/share/browser-shield/current/scripts/update_lists.py
 ```
 
 A failed or too-small download keeps the last good copy and exits 1; the hook warns once the lists are 8 days old.
-Personal additions go in git-ignored `lists/*.local.txt`: `block.local.txt`, `allow.local.txt`, and
-`extensions.local.txt` (ids of your own Chrome extensions Claude may open).
+Personal additions go in `~/.local/share/browser-shield/data/local/`: `block.local.txt`, `allow.local.txt`, and
+`extensions.local.txt` (ids of your own Chrome extensions Claude may open). In a development checkout, the same
+files in `lists/` (git-ignored) and `cache/` are used instead.
 
 ### The autorun mod
 
@@ -140,6 +154,7 @@ is the boundary.
 | `browser_shield/` | URL parsing (with `uts46.txt`), lists, leak patterns and redaction, the per-tool policy |
 | `page/shield.js` | The page script |
 | `lists/` | Curated lists, `sources.json` for the downloads; `*.local.txt` for personal additions (git-ignored) |
+| `scripts/install.py` | Gates a commit in a copy and installs it for the hooks; loads the weekly list update |
 | `scripts/update_lists.py` | Downloads the threat lists and compiles `cache/blocklist.sqlite` |
 | `scripts/gen_uts46.js` | Regenerates the UTS 46 table from Node (`--check` compares) |
 | `scripts/mutation_check.py` | Applies each bug in `tests/mutants.json` to a copy and requires a named test to fail |

@@ -12,15 +12,32 @@ changing the manifest or what it hooks). After changing a guard, also run
 `/usr/bin/python3 -I scripts/mutation_check.py [mutant-id ...]` and add a mutant to `tests/mutants.json` for the new
 guard: each must turn a named test red (a test that has never failed proves nothing).
 
+## Install (after the commit)
+
+```bash
+/usr/bin/python3 -I scripts/install.py
+```
+
+Claude Code's hooks run the installed copy, `~/.local/share/browser-shield/current`, never this checkout. The install
+refuses uncommitted work, unpacks HEAD into a new release, runs the gate there, checks the copy is the commit byte for
+byte, smoke-tests its hook as Claude Code runs it, and only then moves `current` (one rename). `--status` shows what
+is installed and what the hooks and the weekly job run; `--schedule` / `--unschedule` load or remove the weekly list
+update (a LaunchAgent, `local.browser-shield.update-lists`). Install after every commit that changes what sessions run
+(`hooks/`, `browser_shield/`, `page/`, `lists/`, `scripts/update_lists.py`), and say so: until then nothing changed.
+
 ## Rules
 
 - **The hook runs under `/usr/bin/python3` (3.9) with `-I`, stdlib only.** No third-party imports, no syntax newer
   than 3.9 at runtime (`from __future__ import annotations` makes `X | None` hints safe). No `dataclasses`: the hook
   starts on every guarded call and import time is its cost (`python -X importtime`).
-- **The hook is live in every session the moment a file here is saved** (`~/.claude/settings.json` points at this
-  checkout). Run the gate before saving a change to `hooks/` or `browser_shield/`, and never leave either half-edited.
-  Edit test files that contain lure-shaped strings (`curl … | sh`) with the Edit tool: the guard reads Bash command
-  lines and would ask the user about a heredoc carrying them.
+- **Sessions run the installed copy** (`~/.claude/settings.json` points its two hook entries at
+  `~/.local/share/browser-shield/current/hooks/guard.py`), so an edit here is safe to leave half-done until it is
+  committed and installed. Edit test files that contain lure-shaped strings (`curl … | sh`) with the Edit tool: the
+  installed guard still reads every Bash command line and would ask the user about a heredoc carrying them.
+- **The installed copy's state lives in `~/.local/share/browser-shield/data/`**, which each release reaches through
+  its `cache/` and `lists/*.local.txt` symlinks: the downloaded lists and index, `guard.log`, the session markers, and
+  the user's personal lists in `data/local/`. This checkout's `cache/` is the development copy; `install.py` copies it
+  into `data/` once and never overwrites what `data/` already holds.
 - **Fail closed per call, loud otherwise.** An error while judging a call refuses that call and names the
   (redacted) error; never restore fail-open there, since a parser crash would become a way past the guard.
   Unreadable hook input that is not a PreToolUse event, and PostToolUse errors, answer with a `systemMessage`.
@@ -39,6 +56,7 @@ guard: each must turn a named test red (a test that has never failed proves noth
   `enum`, `namespace` or parameter properties; `import type` only). It never makes a permission decision: its browser
   call goes through `$.tool.call`, so the guard, the user's rules and auto mode judge it like the model's own.
 - **No downloaded list is committed**: `cache/` is git-ignored; `scripts/update_lists.py` fetches only the https
-  URLs in `lists/sources.json`, and only with the user's go-ahead (each fetch is a download).
+  URLs in `lists/sources.json`. The weekly LaunchAgent runs it from the installed copy (the user's go, 2026-10-27);
+  any other run, or a new source, still needs the user's go-ahead (each fetch is a download).
 - Verifying a page-script change for real: open a monetized YouTube video in the Browser pane, run `browserShield()`,
   and read `adsSkipped`, the log and the video's `currentTime` and `muted` (README "Use").
