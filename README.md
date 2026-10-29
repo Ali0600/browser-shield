@@ -1,9 +1,21 @@
-# browser-shield
+# claude-browser-shield
 
-Claude's own ad blocker and harm guard for the browsers it drives: the Claude desktop app's built-in Browser pane
-and Claude in Chrome. The pane cannot load extensions and has no ad-blocking setting (an open request:
-[anthropics/claude-code#104030](https://github.com/anthropics/claude-code/issues/104030)), so a YouTube pre-roll
-used to stall every visual review until it ran out. browser-shield works from the two places Claude can act:
+An ad blocker and safety guard for the browsers Claude drives: the Claude desktop app's built-in Browser pane (its
+in-app browser), Claude in Chrome, and WebFetch. It skips YouTube ads, keeps Claude off ad, malware and phishing
+sites, and asks you first before a download, a payment page or a "paste this into Terminal" lure (`curl … | sh`).
+Unofficial: not made by or affiliated with Anthropic.
+
+**This is for you if:**
+
+- ads, pop-ups or YouTube pre-rolls get in the way when Claude browses for you;
+- you looked for an ad blocker, or a way to add uBlock Origin, for Claude Code's Browser pane and found none (the
+  pane cannot load extensions and has no ad-blocking setting; the request is open as
+  [anthropics/claude-code#104030](https://github.com/anthropics/claude-code/issues/104030));
+- you want Claude to stop, or to ask you first, before it opens a phishing page, types an API key into a site, or
+  pipes a script from the web into a shell.
+
+It runs on macOS with Claude Code 2.1.295 or later, in the desktop app or the CLI. [Install](#install) it yourself,
+or [have Claude install it](#have-claude-install-it). It works from the two places Claude can act:
 
 - **A guard hook** (`hooks/guard.py`) that Claude Code runs before and after Claude's tool calls. It refuses
   navigations to ad, malware and phishing hosts, `javascript:`/`data:`/app-launching URLs, URLs a browser would read
@@ -17,27 +29,32 @@ used to stall every visual review until it ran out. browser-shield works from th
   to ad-click, app-launch and download targets, refuses pop-ups nobody clicked for, answers dialogs, denies
   permission, clipboard and fullscreen requests, drops requests to ad networks, and hides ad slots (Fandom's
   included). Claude calls it with the text `browserShield()`; the hook swaps in the file.
-- **An autorun mod** (`hooks/autorun.ts`, off; not loaded anywhere): a Claude Code plugin hook that starts the page
+- **An autorun mod** (`hooks/autorun.ts`, optional, off by default): a Claude Code plugin hook that starts the page
   script by itself after the pane or Chrome lands on YouTube, as a tool call of its own that the guard, your permission rules and auto
   mode judge like any other.
 
 ## Install
 
-Claude Code runs an installed copy, never the checkout, so an edit in progress reaches no session. From a clean
-checkout (macOS, `/usr/bin/python3` 3.9, Node 22 and the `claude` CLI for the gate):
+You need macOS, Apple's `/usr/bin/python3` (3.9 or later, from the Xcode Command Line Tools), Node 22 and the
+`claude` CLI on your `PATH` or at `~/.local/bin/claude`: the installer runs the project's tests before it installs
+anything. Then:
 
 ```bash
+git clone https://github.com/Ali0600/claude-browser-shield.git
+cd claude-browser-shield
 /usr/bin/python3 -I scripts/install.py
 /usr/bin/python3 -I scripts/install.py --schedule
 ```
 
-The first command unpacks the current commit into `~/.local/share/browser-shield/releases/<commit>/` and runs the
-whole gate there. It checks the copy is the commit byte for byte and smoke-tests the copy's hook the way Claude Code
-runs it (an ad host must be denied, a plain `ls` let through). Only then does it point `current` at the copy, with
-one rename, so a hook never starts on half a copy. The three newest releases stay for a rollback. The second command
-loads a LaunchAgent (`local.browser-shield.update-lists`) that refreshes the threat lists every Monday at 11:00, or
+Claude Code runs an installed copy, never the checkout, so an edit in progress reaches no session. `install.py`
+unpacks the current commit into `~/.local/share/browser-shield/releases/<commit>/` (installed paths keep the short
+name) and runs the whole gate there. It checks the copy is the commit byte for byte and smoke-tests the copy's hook
+the way Claude Code runs it (an ad host must be denied, a plain `ls` let through). Only then does it point `current`
+at the copy, with one rename, so a hook never starts on half a copy. The three newest releases stay for a rollback.
+`--schedule` loads a LaunchAgent (`local.browser-shield.update-lists`) that refreshes the threat lists every Monday at 11:00, or
 at the next wake if the Mac was asleep (log: `~/Library/Logs/browser-shield-update-lists.log`). `--status` shows
-what is installed, the lists' age, and what the hooks and the job run; `--unschedule` removes the job.
+what is installed, the lists' age, and what the hooks and the job run, and exits 0 only once the hook entries below
+run the installed guard; `--unschedule` removes the job.
 
 The hooks live in `~/.claude/settings.json` (user scope, so every project's sessions get them):
 
@@ -76,10 +93,23 @@ Personal additions go in `~/.local/share/browser-shield/data/local/`: `block.loc
 `extensions.local.txt` (ids of your own Chrome extensions Claude may open). In a development checkout, the same
 files in `lists/` (git-ignored) and `cache/` are used instead.
 
+### Have Claude install it
+
+Paste this into a Claude Code session on your Mac:
+
+```text
+Install claude-browser-shield from https://github.com/Ali0600/claude-browser-shield. Clone it, follow the Install
+section of its README, and add its PreToolUse and PostToolUse entries to the "hooks" block of
+~/.claude/settings.json beside any hooks already there; show me that change before you save it. Then run
+/usr/bin/python3 -I scripts/install.py --status in the clone and show me the output. Ask me before --schedule.
+```
+
+The guard is on from the moment the settings edit is saved; `--status` exiting 0 confirms the hooks run it.
+
 ### The autorun mod
 
 The repo root is also a Claude Code plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`). Load it for one
-session with `claude --plugin-dir ~/projects/automation/browser-shield`, or for every session the desktop app starts by
+session with `claude --plugin-dir /path/to/claude-browser-shield`, or for every session the desktop app starts by
 naming the folder in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. It needs the guard
 hooks above (it replaces their reminder). In auto mode it cannot run: the classifier refuses a call no request asked
 for (measured), so the mod keeps the guard's reminder and says why. It runs where your permission rules allow the

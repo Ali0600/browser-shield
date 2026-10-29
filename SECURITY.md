@@ -1,6 +1,6 @@
 # Security
 
-browser-shield guards the calls an AI agent (Claude Code) makes to the browsers, shells and fetch tools it drives.
+claude-browser-shield guards the calls an AI agent (Claude Code) makes to the browsers, shells and fetch tools it drives.
 
 - **The hook is the boundary.** `hooks/guard.py` sees each call before it runs and refuses or asks about it; when it
   cannot judge a call it refuses it, and with `"onFailure": "block"` a hook that fails to run refuses it too.
@@ -12,5 +12,8 @@ browser-shield guards the calls an AI agent (Claude Code) makes to the browsers,
 ## Reporting a bypass
 
 A bypass is a call the guard should refuse or ask about (by the rules in the README and `docs/DECISIONS.md`) that it
-lets through, or a way to make it misread a URL. Please do not open a public issue for one: contact
-[@Ali0600](https://github.com/Ali0600) on GitHub first, with the tool name and input that got through.
+lets through, or a way to make it misread a URL. Please do not open a public issue for one: report it privately
+through GitHub's private vulnerability reporting, the **Report a vulnerability** button on this repository's
+**Security** tab ([direct link](https://github.com/Ali0600/claude-browser-shield/security/advisories/new); it needs a
+GitHub account). Include the tool name and the input that got through. The report stays between you and the
+maintainer until an advisory is published.
