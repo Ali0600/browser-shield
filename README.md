@@ -14,6 +14,11 @@ Unofficial: not made by or affiliated with Anthropic.
 - you want Claude to stop, or to ask you first, before it opens a phishing page, types an API key into a site, or
   pipes a script from the web into a shell.
 
+It acts only when Claude drives the browser. While you click around the Browser pane yourself, nothing runs and ads
+play as usual: Claude Code runs hooks only around Claude's own tool calls, a plugin gets no signal when you browse,
+and the pane cannot load extensions. To have ads skipped on a YouTube tab you opened, ask Claude to start the shield
+on it ([Use](#use)).
+
 It runs on macOS with Claude Code 2.1.295 or later, in the desktop app or the CLI. [Install](#install) it yourself,
 or [have Claude install it](#have-claude-install-it). It works from the two places Claude can act:
 
@@ -157,6 +162,10 @@ loaded, the mod runs it instead and the note says it started (or why it could no
 means YouTube is showing its ad-blocker notice: the shield stands down there, gives the video its sound back, and
 never hides the notice (the hook also refuses any script that would). Local dev hosts (`localhost`, `127.x`,
 `*.localhost`, `*.test`) are left alone so the app under test behaves as built.
+
+On a tab you opened yourself, ask in the chat: "run browserShield() on my YouTube tab". It keeps skipping ads as you
+go from video to video in that tab; a reload or a new tab needs another run. A paused ad stays paused: the shield
+moves it to its last tenth of a second, and it ends when the video plays again.
 
 Everything the guard refuses or asks about is logged to `guard.log` (one JSON line each, secrets redacted), in the
 plugin's data folder or, for the install from a checkout, `~/.local/share/browser-shield/data/`.
