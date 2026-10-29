@@ -1,14 +1,17 @@
 """Download the threat lists named in lists/sources.json into cache/lists/ and compile cache/blocklist.sqlite.
 
-    /usr/bin/python3 -I scripts/update_lists.py            # fetch every source, then compile
-    /usr/bin/python3 -I scripts/update_lists.py --compile  # compile from what is already cached, no network
+    /usr/bin/python3 -I scripts/update_lists.py             # fetch every source, then compile
+    /usr/bin/python3 -I scripts/update_lists.py --compile   # compile from what is already cached, no network
+    /usr/bin/python3 -I scripts/update_lists.py --if-stale  # the plugin's session start: only when a week old
 
 A fetch that fails, comes back too small or too large never replaces the last good copy (an empty list would
 silently switch the protection off); the compile then uses that copy and the run exits 1, naming the failure.
+One run at a time: a second one (two sessions starting together) leaves without touching anything.
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import sys
@@ -25,6 +28,7 @@ from browser_shield import lists  # noqa: E402
 SOURCES = lists.LISTS_DIR / "sources.json"
 LIST_CACHE = lists.CACHE_DIR / "lists"
 STATE = LIST_CACHE / "state.json"
+FRESH_FOR = 7 * 86400  # seconds; --if-stale refreshes once the oldest source is a week old (the hook warns at 8 days)
 CRITICAL_HOSTS = ["www.youtube.com", "i.ytimg.com", "rr1---sn-abc.googlevideo.com", "youtubei.googleapis.com",
                   "yt3.ggpht.com", "www.google.com", "www.gstatic.com", "github.com"]
 
@@ -66,8 +70,23 @@ def compile_cached(sources: list[dict], cache: Path, index: Path) -> dict[str, i
 
 def main(argv: list[str], fetcher: Optional[Callable[[str, int], bytes]] = None, sources_path: Path = SOURCES,
          cache: Path = LIST_CACHE, index: Path = lists.INDEX) -> int:
-    sources = json.loads(sources_path.read_text(encoding="utf-8"))
+    if "--if-stale" in argv and index.exists() and time.time() - index.stat().st_mtime < FRESH_FOR:
+        return 0  # fresh: no network and nothing written (the plugin runs this at every session start)
     cache.mkdir(parents=True, exist_ok=True)
+    with open(cache / ".update.lock", "a") as held:
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("another list update is running; this one leaves it to finish")
+            return 0
+        if "--if-stale" in argv:
+            print(f"--- {time.strftime('%Y-%m-%dT%H:%M:%S')} the lists are missing or a week old: updating")
+        return run(argv, fetcher, sources_path, cache, index)
+
+
+def run(argv: list[str], fetcher: Optional[Callable[[str, int], bytes]], sources_path: Path, cache: Path,
+        index: Path) -> int:
+    sources = json.loads(sources_path.read_text(encoding="utf-8"))
     records = []
     if "--compile" not in argv:
         for src in sources:

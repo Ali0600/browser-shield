@@ -35,6 +35,28 @@ is installed and what the hooks and the weekly job run; `--schedule` / `--unsche
 update (a LaunchAgent, `local.browser-shield.update-lists`). Install after every commit that changes what sessions run
 (`hooks/`, `browser_shield/`, `page/`, `lists/`, `scripts/update_lists.py`), and say so: until then nothing changed.
 
+## The plugin (what other people install)
+
+`plugins/browser-shield/` is the plugin the marketplace (`.claude-plugin/marketplace.json`) lists. Its manifest and
+`hooks/hooks.json` are written by hand; everything else in it is a copy of the runtime files. After editing any of
+those (the same list as above), rebuild the copy in the same commit; the gate's `tests/test_plugin.py` fails on drift:
+
+```bash
+/usr/bin/python3 -I scripts/build_plugin.py
+```
+
+- **People get a change only when `version` in `plugins/browser-shield/.claude-plugin/plugin.json` goes up**: bump it
+  (semver) in the commit that releases, after the gate, and never set a version in `marketplace.json` too (the
+  manifest's wins silently). A push to `main` without a bump reaches nobody who has it installed.
+- **The plugin is `browser-shield`, never `claude-…`**: Claude Code refuses third-party plugin names starting with
+  `claude-`. The marketplace is `claude-browser-shield`, so the install id is `browser-shield@claude-browser-shield`.
+- **No symbolic links in the plugin folder**: the plugin directory drops them, and Claude Code skips links that leave
+  the plugin for a local install. `build_plugin.py` copies only files git tracks (never `*.local.txt`).
+- **Its hooks pass `${CLAUDE_PLUGIN_DATA}` as `BROWSER_SHIELD_DATA`**, where the lists, `guard.log`, the markers and
+  `local/` live (`lists.data_dirs`). An empty or relative value refuses guarded calls with the reason. Its matchers
+  equal the README's settings JSON (pinned by a test); `claude plugin validate plugins/browser-shield` after changing
+  its manifest or hooks.
+
 ## Rules
 
 - **The repo is public** (github.com/Ali0600/claude-browser-shield): no personal paths, transcript text, real secrets or
@@ -64,12 +86,14 @@ update (a LaunchAgent, `local.browser-shield.update-lists`). Install after every
 - **`page/shield.js` must leave local dev hosts alone, replace no built-in function on YouTube, and never hide or
   dismiss YouTube's enforcement notice.** Bump `VERSION` when its behaviour changes (an older copy on a page stands
   down for a newer one).
-- **The repo root is also a Claude Code plugin** (`.claude-plugin/plugin.json`, `hooks/hooks.json` naming the mod
-  `hooks/autorun.ts`). The mod is TypeScript with erasable syntax only (Node strips its types for the unit tests: no
+- **The repo root is also a Claude Code plugin, `browser-shield-autorun`** (`.claude-plugin/plugin.json`,
+  `hooks/hooks.json` naming the mod `hooks/autorun.ts`), loaded only with `--plugin-dir` and not in the marketplace
+  (the user left it off, 2026-10-26). The mod is TypeScript with erasable syntax only (Node strips its types for the unit tests: no
   `enum`, `namespace` or parameter properties; `import type` only). It never makes a permission decision: its browser
   call goes through `$.tool.call`, so the guard, the user's rules and auto mode judge it like the model's own.
 - **No downloaded list is committed**: `cache/` is git-ignored; `scripts/update_lists.py` fetches only the https
-  URLs in `lists/sources.json`. The weekly LaunchAgent runs it from the installed copy (the user's go, 2026-10-27);
-  any other run, or a new source, still needs the user's go-ahead (each fetch is a download).
+  URLs in `lists/sources.json`. The weekly LaunchAgent runs it from the installed copy (the user's go, 2026-10-27),
+  and the plugin's session-start hook runs it on installers' machines (`--if-stale`: a week old or missing); any
+  other run here, or a new source, still needs the user's go-ahead (each fetch is a download).
 - Verifying a page-script change for real: open a monetized YouTube video in the Browser pane, run `browserShield()`,
   and read `adsSkipped`, the log and the video's `currentTime` and `muted` (README "Use").

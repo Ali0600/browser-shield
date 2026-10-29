@@ -1,0 +1,20 @@
+# Hosts the guard never blocks by list, even if a downloaded list names one (a false positive there would break
+# the agent's own work, not protect anyone). Suffix match: "youtube.com" covers "www.youtube.com". The download,
+# ad-click and secret checks still apply. Personal additions go in allow.local.txt (git-ignored).
+youtube.com
+youtu.be
+ytimg.com
+googlevideo.com
+youtubei.googleapis.com
+ggpht.com
+youtube-nocookie.com
+google.com
+gstatic.com
+github.com
+githubusercontent.com
+roblox.com
+rbxcdn.com
+fandom.com
+wikipedia.org
+claude.ai
+anthropic.com

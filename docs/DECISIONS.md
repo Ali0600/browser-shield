@@ -18,10 +18,6 @@
   match the raw text, so the lure goes unasked (the fast path now loads the policy for it). Normalising quotes for
   the lure rules would also ask about `echo "curl|bash"`, the false positive the 2026-10-26 replay removed. Revisit
   hook: `policy.check_shell`, judged on shlex segments as the opener rule is.
-- **The guard shipped as the plugin's own hooks, installed with `/plugin install`** (2026-10-27), for people who use
-  the public repo: Claude Code copies an installed plugin into its own cache, which pins a version as
-  `scripts/install.py` does, without editing `settings.json` by hand. Revisit hook: `hooks/hooks.json` (it names only
-  the mod's module today) and the README's Install.
 
 ## 2026-10-26: where Claude's ad and harm blocking can live
 
@@ -298,3 +294,38 @@ per lens that reproduced each finding before it counted. Each finding below now 
 - **MIT**: chosen (the user's pick, 2026-10-27). Short, permissive, the usual choice for a small stdlib tool. The
   downloaded lists keep their own licences (HaGeZi's is GPL-3.0): they are fetched by each user, never committed.
 - **No licence, as the owner's other public repo has**: rejected. Readers could see the code but not reuse it.
+
+## 2026-10-29: how other people install it: a plugin from the repo's own marketplace
+
+The public repo needed an install that does not ask for Node, the `claude` CLI and a hand edit of `settings.json`
+(`install.py` runs the whole gate first). The user picked the plugin route (2026-10-29), the backlog's idea.
+
+- **Where the plugin lives.**
+  - `plugins/browser-shield/`, real copies of the 15 runtime files made by `scripts/build_plugin.py`, a test failing
+    on drift: chosen.
+  - The same folder of symbolic links into the repo: rejected, measured. Claude Code dereferences links into the
+    rest of the marketplace for a git install, but skips links that leave the plugin for `--plugin-dir` and local
+    installs, and the plugin directory drops every link (`claude plugin validate`).
+  - The repo root as the guard's plugin, the mod moved to a folder of its own: rejected. The mod reads
+    `page/shield.js` from its own root (the 2026-10-26 layout fork), and every install would copy the tests and
+    their lure-shaped fixtures.
+  - One plugin carrying both the guard's hooks and the mod, the mod behind an option that is off by default:
+    rejected. Every install would load an early-access module engine beside the security hook, and the user left
+    the mod off.
+- **Its name.** `claude-browser-shield`: refused by `claude plugin validate` (Claude Code keeps `claude-` plugin names
+  for Anthropic's own). `browser-shield` in a marketplace named `claude-browser-shield`: chosen. The mod's plugin
+  became `browser-shield-autorun` so the two never share a name.
+- **Its state.** `${CLAUDE_PLUGIN_DATA}`, passed to the guard as `BROWSER_SHIELD_DATA`: chosen; it survives updates,
+  and the copy in Claude Code's cache is replaced by each one. An empty value refuses guarded calls and names why,
+  instead of writing into that copy.
+- **The threat lists.**
+  - An async SessionStart hook running `update_lists.py --if-stale` (missing or a week old, one run at a time under
+    a lock): chosen. No step for the user, nothing at a session's start waits for it, and the hook's 8-day warning
+    still shows a refresh that keeps failing.
+  - A command the user runs by hand: rejected. Every installer would see "not installed" until they acted.
+  - Every session start: rejected, 7 MB each time.
+- **Releases.** An explicit `version` in the plugin's manifest, bumped to release: chosen; `main` has no CI, so a
+  push must not reach installers by itself. The commit SHA as the version: rejected for that reason. Revisit hook:
+  drop `version` from `plugins/browser-shield/.claude-plugin/plugin.json` once a CI run gates `main`.
+- **Not done:** an icon (`.claude-plugin/icon.png`), which the plugin directory wants and takes only once, on the
+  first submission.

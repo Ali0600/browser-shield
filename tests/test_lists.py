@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from browser_shield import lists, policy
 
@@ -105,6 +107,35 @@ class CuratedLists(unittest.TestCase):
                      "yt3.ggpht.com", "www.google.com", "www.gstatic.com", "accounts.google.com"):
             with self.subTest(host=host):
                 self.assertIsNone(real.blocked_by(host))
+
+
+class DataFolder(unittest.TestCase):
+    """Where a copy keeps its downloads and personal lists: its own cache/ and lists/, or a plugin's data folder."""
+
+    def dirs(self, value):
+        env = {k: v for k, v in os.environ.items() if k != "BROWSER_SHIELD_DATA"}
+        if value is not None:
+            env["BROWSER_SHIELD_DATA"] = value
+        with mock.patch.dict(os.environ, env, clear=True):
+            return lists.data_dirs(Path("/copy"))
+
+    def test_each_kind_of_copy(self):
+        self.assertEqual(self.dirs(None), (Path("/copy/cache"), Path("/copy/lists")))
+        self.assertEqual(self.dirs("/data/x"), (Path("/data/x"), Path("/data/x/local")))
+        for bad in ("", "relative/data", "${CLAUDE_PLUGIN_DATA}"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "BROWSER_SHIELD_DATA"):
+                self.dirs(bad)
+
+    def test_personal_lists_come_from_the_local_folder(self):
+        tmp = Path(tempfile.mkdtemp())
+        curated, local = tmp / "curated", tmp / "local"
+        curated.mkdir()
+        local.mkdir()
+        (local / "block.local.txt").write_text("mine.example\n")
+        (curated / "block.local.txt").write_text("not-read.example\n")
+        found = lists.Lists(lists_dir=curated, index=tmp / "none.sqlite", local_dir=local)
+        self.assertEqual(found.blocked_by("mine.example"), ("mine.example", "block.local.txt"))
+        self.assertIsNone(found.blocked_by("not-read.example"))
 
 
 if __name__ == "__main__":

@@ -215,7 +215,7 @@ def _check_target(t: urls.Target, lists: Lists, where: str, v: Verdict, depth: i
         if m and m.group(1).lower() in lists.extensions:
             return  # the user's own extension, listed in lists/extensions.local.txt
         # Named where it really is: in an installed copy lists/ holds a link into data/local/.
-        local = os.path.realpath(os.path.join(str(lists.lists_dir), "extensions.local.txt"))
+        local = os.path.realpath(os.path.join(str(lists.local_dir), "extensions.local.txt"))
         v.raise_to(ASK, f"{where}: {t.url[:60]} is a browser or extension page (it can change settings or approve "
                         f"what an extension does); add your own extensions' ids to {local}")
         return

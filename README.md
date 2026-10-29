@@ -35,9 +35,37 @@ or [have Claude install it](#have-claude-install-it). It works from the two plac
 
 ## Install
 
-You need macOS, Apple's `/usr/bin/python3` (3.9 or later, from the Xcode Command Line Tools), Node 22 and the
-`claude` CLI on your `PATH` or at `~/.local/bin/claude`: the installer runs the project's tests before it installs
-anything. Then:
+### As a Claude Code plugin
+
+You need macOS and Apple's `/usr/bin/python3` (3.9 or later; `xcode-select --install` adds it with the Command Line
+Tools). In Claude Code, type:
+
+```text
+/plugin marketplace add Ali0600/claude-browser-shield
+/plugin install browser-shield@claude-browser-shield
+/reload-plugins
+```
+
+From a terminal, the first two are `claude plugin marketplace add Ali0600/claude-browser-shield` and
+`claude plugin install browser-shield@claude-browser-shield`. The plugin is named `browser-shield`: Claude Code keeps
+plugin names that start with `claude-` for Anthropic's own. To check it works, ask Claude to open
+`https://adnxs.com/` (an ad server) in its browser: the guard refuses the call before anything loads.
+
+The plugin runs the same guard with the same hooks as the settings below, plus one when a session starts that
+downloads the threat lists in the background when they are missing or a week old (about 7 MB, from the sources in
+`lists/sources.json`). The lists, the guard's log and your personal lists (in its `local/` folder) live in
+`~/.claude/plugins/data/browser-shield-claude-browser-shield/`, which survives updates. A new version reaches you
+with `claude plugin marketplace update claude-browser-shield` and `claude plugin update
+browser-shield@claude-browser-shield` (then restart Claude Code). `/plugin disable browser-shield@claude-browser-shield`
+switches it off; it still works if a broken install is refusing every guarded call, since it is not a tool call. Use
+the plugin or the install below, not both, or every call is judged twice.
+
+### From a checkout
+
+This is how the repo's own Mac runs it: each commit is gated again before sessions get it, and a LaunchAgent refreshes
+the lists. You need macOS, Apple's `/usr/bin/python3` (3.9 or later, from the Xcode Command Line Tools), Node 22 and
+the `claude` CLI on your `PATH` or at `~/.local/bin/claude`: the installer runs the project's tests before it
+installs anything. Then:
 
 ```bash
 git clone https://github.com/Ali0600/claude-browser-shield.git
@@ -98,18 +126,18 @@ files in `lists/` (git-ignored) and `cache/` are used instead.
 Paste this into a Claude Code session on your Mac:
 
 ```text
-Install claude-browser-shield from https://github.com/Ali0600/claude-browser-shield. Clone it, follow the Install
-section of its README, and add its PreToolUse and PostToolUse entries to the "hooks" block of
-~/.claude/settings.json beside any hooks already there; show me that change before you save it. Then run
-/usr/bin/python3 -I scripts/install.py --status in the clone and show me the output. Ask me before --schedule.
+Install the browser-shield plugin from https://github.com/Ali0600/claude-browser-shield, following the "As a
+Claude Code plugin" part of its README: run `claude plugin marketplace add Ali0600/claude-browser-shield` and
+`claude plugin install browser-shield@claude-browser-shield`, showing me each command before you run it. If the
+claude command is not available, tell me which /plugin commands to type instead. Then tell me to run /reload-plugins.
 ```
 
-The guard is on from the moment the settings edit is saved; `--status` exiting 0 confirms the hooks run it.
+After `/reload-plugins`, a navigation to an ad host (`https://adnxs.com/`) is refused: that is the check it works.
 
 ### The autorun mod
 
-The repo root is also a Claude Code plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`). Load it for one
-session with `claude --plugin-dir /path/to/claude-browser-shield`, or for every session the desktop app starts by
+The repo root is also a Claude Code plugin, `browser-shield-autorun` (`.claude-plugin/plugin.json`,
+`hooks/hooks.json`), which the marketplace does not list. Load it for one session with `claude --plugin-dir /path/to/claude-browser-shield`, or for every session the desktop app starts by
 naming the folder in `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. It needs the guard
 hooks above (it replaces their reminder). In auto mode it cannot run: the classifier refuses a call no request asked
 for (measured), so the mod keeps the guard's reminder and says why. It runs where your permission rules allow the
@@ -130,7 +158,8 @@ means YouTube is showing its ad-blocker notice: the shield stands down there, gi
 never hides the notice (the hook also refuses any script that would). Local dev hosts (`localhost`, `127.x`,
 `*.localhost`, `*.test`) are left alone so the app under test behaves as built.
 
-Everything the guard refuses or asks about is logged to `cache/guard.log` (one JSON line each, secrets redacted).
+Everything the guard refuses or asks about is logged to `guard.log` (one JSON line each, secrets redacted), in the
+plugin's data folder or, for the install from a checkout, `~/.local/share/browser-shield/data/`.
 
 ## How it works
 
@@ -195,12 +224,15 @@ is the boundary.
 | Path | What |
 |---|---|
 | `hooks/guard.py` | The hook entry point Claude Code runs |
-| `hooks/autorun.ts`, `hooks/hooks.json`, `.claude-plugin/` | The autorun mod and its plugin manifest |
+| `plugins/browser-shield/` | The plugin people install: manifest, hooks, and a copy of the runtime files (`scripts/build_plugin.py`) |
+| `.claude-plugin/marketplace.json` | The marketplace that lists it (`/plugin marketplace add Ali0600/claude-browser-shield`) |
+| `hooks/autorun.ts`, `hooks/hooks.json`, `.claude-plugin/plugin.json` | The autorun mod and its plugin manifest |
 | `browser_shield/` | URL parsing (with `uts46.txt`), lists, leak patterns and redaction, the per-tool policy |
 | `page/shield.js` | The page script |
 | `lists/` | Curated lists, `sources.json` for the downloads; `*.local.txt` for personal additions (git-ignored) |
 | `scripts/install.py` | Gates a commit in a copy and installs it for the hooks; loads the weekly list update |
-| `scripts/update_lists.py` | Downloads the threat lists and compiles `cache/blocklist.sqlite` |
+| `scripts/update_lists.py` | Downloads the threat lists and compiles `blocklist.sqlite` (`--if-stale`: only when a week old) |
+| `scripts/build_plugin.py` | Copies the runtime files into `plugins/browser-shield/` (`--check` reports drift) |
 | `scripts/gen_uts46.js` | Regenerates the UTS 46 table from Node (`--check` compares) |
 | `scripts/mutation_check.py` | Applies each bug in `tests/mutants.json` to a copy and requires a named test to fail |
 | `tests/` | Python `unittest` suite, `shield.test.js` and `autorun.test.mjs` (`node --test`), `autorun.plugin.test.ts` (`claude plugin test .`) |
@@ -220,13 +252,15 @@ is the boundary.
   ads cleared in under 2 seconds each, with the viewer's sound restored.
 - Ran three adversarial reviews (5 hunters; 4 lenses with 2 refuters per finding; 4 hunters with a skeptic each)
   and fixed, documented or refuted every finding, among them a forged-status path that let a page write into
-  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 167 Python, 47 Node and
-  10 plugin-engine tests and a mutation harness of 191 deliberate bugs, each required to turn a named test red.
+  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 181 Python, 47 Node and
+  10 plugin-engine tests and a mutation harness of 204 deliberate bugs, each required to turn a named test red.
 - Designed a secret-exfiltration guard: 14 vendor token patterns, a linear-time JWT scan, Luhn plus card-network
   checks with 47 published test cards allowed, and redaction of every log line and refusal message.
-- Deployed it like a service: each commit gated again inside its own pinned release, smoke-tested as Claude Code
-  runs it and swapped in by one atomic rename; a launchd job refreshes 298,397 threat-list domains weekly, and the
-  hook entries fail closed when the guard cannot run.
+- Shipped it two ways: as a Claude Code plugin from the repo's own marketplace (a generated copy of 15 runtime
+  files behind a drift check, tested the way Claude Code installs it: a cache copy, a separate data folder,
+  placeholders filled in), and on its own Mac like a service, each commit gated again inside a pinned release and
+  swapped in by one atomic rename, with a launchd job refreshing 298,397 threat-list domains weekly; both fail
+  closed when the guard cannot run.
 
 ## Licence
 

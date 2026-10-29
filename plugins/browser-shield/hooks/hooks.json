@@ -1,0 +1,42 @@
+{
+  "description": "browser-shield: judge Claude's browser, shell and fetch calls before they run; refresh the threat lists in the background when a session starts and they are a week old",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BROWSER_SHIELD_DATA=\"${CLAUDE_PLUGIN_DATA}\" /usr/bin/python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/update_lists.py\" --if-stale >> \"${CLAUDE_PLUGIN_DATA}/update.log\" 2>&1 || true",
+            "async": true,
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|javascript_tool|computer|form_input|file_upload|upload_image|gif_creator|shortcuts_execute)$|^WebFetch$|^Bash$|^mcp__terminal__run_in_terminal$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BROWSER_SHIELD_DATA=\"${CLAUDE_PLUGIN_DATA}\" /usr/bin/python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"",
+            "timeout": 10,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__((remote-devices__)?Claude_Browser|claude-in-chrome)__(navigate|preview_start|browser_batch|get_page_text|read_page|find|javascript_tool)$|^WebFetch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BROWSER_SHIELD_DATA=\"${CLAUDE_PLUGIN_DATA}\" /usr/bin/python3 -I \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

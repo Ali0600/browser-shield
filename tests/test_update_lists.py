@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import fcntl
 import io
 import json
+import os
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -96,6 +99,41 @@ class Update(unittest.TestCase):
     def test_only_https_sources(self):
         with self.assertRaises(ValueError):
             update_lists.fetch("http://a.example/list.txt", 10)
+
+    def test_if_stale_runs_only_for_missing_or_week_old_lists(self):
+        bodies = {"https://a.example/list.txt": FEED, "https://b.example/list.txt": FEED}
+        fetched = []
+
+        def fetcher(url, max_bytes):
+            fetched.append(url)
+            return bodies[url].encode()
+
+        def run():
+            fetched.clear()
+            with redirect_stdout(io.StringIO()) as out:
+                code = update_lists.main(["--if-stale"], fetcher, self.sources, self.cache, self.index)
+            return code, out.getvalue()
+
+        code, out = run()  # no index yet
+        self.assertEqual((code, len(fetched)), (0, 2), out)
+        self.assertIn("missing or a week old", out)
+        old = time.time() - 6.9 * 86400
+        os.utime(self.index, (old, old))
+        self.assertEqual(run(), (0, ""), "a six-day-old index is left alone, silently")
+        self.assertEqual(fetched, [])
+        old = time.time() - 7.1 * 86400
+        os.utime(self.index, (old, old))
+        code, out = run()
+        self.assertEqual((code, len(fetched)), (0, 2), out)
+
+    def test_a_second_run_leaves_while_another_holds_the_lock(self):
+        self.cache.mkdir(parents=True)
+        with open(self.cache / ".update.lock", "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            code, out = self.run_update({})  # any fetch would raise KeyError
+        self.assertEqual(code, 0, out)
+        self.assertIn("another list update is running", out)
+        self.assertFalse(self.index.exists())
 
 
 if __name__ == "__main__":

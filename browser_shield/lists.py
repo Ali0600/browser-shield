@@ -6,6 +6,7 @@ the compiled index answers a lookup in well under a millisecond without loading 
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -14,7 +15,26 @@ from . import urls
 
 ROOT = Path(__file__).resolve().parent.parent
 LISTS_DIR = ROOT / "lists"  # committed, curated
-CACHE_DIR = ROOT / "cache"  # downloaded and compiled, git-ignored
+
+
+def data_dirs(root: Path = ROOT) -> tuple[Path, Path]:
+    """(downloads, index, log and session markers; personal lists) for this copy.
+
+    A plugin install keeps both in the data folder Claude Code gives the plugin, which survives its updates (its
+    hook commands pass ${CLAUDE_PLUGIN_DATA} as BROWSER_SHIELD_DATA); any other copy keeps them in its own cache/
+    and lists/. An empty or relative value means Claude Code did not fill the folder in: refused, so the guard
+    names the problem instead of writing into the plugin's own copy, which the next update replaces.
+    """
+    data = os.environ.get("BROWSER_SHIELD_DATA")
+    if data is None:
+        return root / "cache", root / "lists"
+    if not os.path.isabs(data):
+        raise ValueError(f"BROWSER_SHIELD_DATA is {data!r}, not an absolute path: this Claude Code did not fill in "
+                         "the plugin's data folder (${CLAUDE_PLUGIN_DATA}); update Claude Code")
+    return Path(data), Path(data) / "local"
+
+
+CACHE_DIR, LOCAL_DIR = data_dirs()  # downloaded and compiled (git-ignored); the user's own *.local.txt lists
 INDEX = CACHE_DIR / "blocklist.sqlite"
 
 _HOSTS_LINE = re.compile(r"^(?:0\.0\.0\.0|127\.0\.0\.1|::1?|::)\s+(\S+)")
@@ -100,19 +120,23 @@ def index_entries(index: Path, host: str) -> list[str]:
 class Lists:
     """The block and allow sets a guard consults: curated text lists always, the compiled index when it exists."""
 
-    def __init__(self, lists_dir: Path = LISTS_DIR, index: Path = INDEX):
-        self.lists_dir = lists_dir
-        self.allow = read_list(lists_dir / "allow.txt") | read_list(lists_dir / "allow.local.txt")
+    def __init__(self, lists_dir: Path = LISTS_DIR, index: Path = INDEX, local_dir: Optional[Path] = None):
+        # The personal lists sit beside the curated ones, except for the copy's own lists in a plugin install, which
+        # keeps them in its data folder (data_dirs).
+        if local_dir is None:
+            local_dir = LOCAL_DIR if lists_dir == LISTS_DIR else lists_dir
+        self.lists_dir, self.local_dir = lists_dir, local_dir
+        self.allow = read_list(lists_dir / "allow.txt") | read_list(local_dir / "allow.local.txt")
         self.block: dict[str, str] = {}
-        for name in ("ad-hosts.txt", "block.local.txt"):
-            for d in read_list(lists_dir / name):
+        for folder, name in ((lists_dir, "ad-hosts.txt"), (local_dir, "block.local.txt")):
+            for d in read_list(folder / name):
                 self.block.setdefault(d, name)
         self.ask = read_list(lists_dir / "ask-hosts.txt")
         self.extensions = {
             line.split("#", 1)[0].strip().lower()
-            for line in (lists_dir / "extensions.local.txt").read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in (local_dir / "extensions.local.txt").read_text(encoding="utf-8", errors="replace").splitlines()
             if line.split("#", 1)[0].strip()
-        } if (lists_dir / "extensions.local.txt").exists() else set()
+        } if (local_dir / "extensions.local.txt").exists() else set()
         self.index = index if index.exists() else None
         self.index_error = ""
 

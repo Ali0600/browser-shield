@@ -17,13 +17,25 @@ import re
 import sys
 import time
 
+
+def _quote(word: str) -> str:
+    """shlex.quote, without its import on every shell call (a path quoted in a message's command)."""
+    return word if re.fullmatch(r"[\w@%+=:,./-]+", word, re.ASCII) else "'" + word.replace("'", "'\"'\"'") + "'"
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 # The copy as Claude Code names it (~/.local/share/browser-shield/current, not the release it resolves to), for
 # commands quoted in messages: they stay right after the next install.
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UPDATE = f"/usr/bin/python3 -I {os.path.join(HERE, 'scripts', 'update_lists.py')}"
+# A plugin install's data folder (browser_shield/lists.py data_dirs, which refuses a bad value when a call loads the
+# lists; mirrored here without importing it, since plain shell calls must not load it).
+DATA = os.environ.get("BROWSER_SHIELD_DATA")
+PLUGIN = DATA is not None and os.path.isabs(DATA)
+UPDATE = (f"BROWSER_SHIELD_DATA={_quote(DATA)} " if PLUGIN else "") \
+    + f"/usr/bin/python3 -I {_quote(os.path.join(HERE, 'scripts', 'update_lists.py'))}"
+UPDATE_LOG = os.path.join(DATA, "update.log") if PLUGIN else "~/Library/Logs/browser-shield-update-lists.log"
 # The log and the once-per-session markers; tests point this elsewhere so they never write the live log.
-STATE_DIR = os.environ.get("BROWSER_SHIELD_STATE_DIR") or os.path.join(ROOT, "cache")
+STATE_DIR = os.environ.get("BROWSER_SHIELD_STATE_DIR") or (DATA if PLUGIN else os.path.join(ROOT, "cache"))
 LOG = os.path.join(STATE_DIR, "guard.log")
 LOG_LIMIT = 1_000_000
 STALE_AFTER = 8 * 86400  # seconds; the lists are rebuilt daily to every few hours upstream
@@ -124,13 +136,17 @@ def pre_tool_use(event: dict) -> dict:
                                     f"only the curated lists are checked until it is rebuilt: {update} --compile")
         elif lists.index is None and once_per_session(session, "no-index"):
             out["systemMessage"] = ("browser-shield: the malware and phishing lists are not installed, so only the "
-                                    f"curated lists are checked. Run: {update}")
+                                    + ("curated lists are checked; the plugin downloads them in the background when a "
+                                       f"session starts ({UPDATE_LOG}). " if PLUGIN else "curated lists are checked. ")
+                                    + f"Run: {update}")
         elif lists.index is not None and time.time() - os.path.getmtime(lists.index) > STALE_AFTER \
                 and once_per_session(session, "stale-index"):
             days = int((time.time() - os.path.getmtime(lists.index)) // 86400)
             out["systemMessage"] = (f"browser-shield: the malware and phishing lists are {days} days old (phishing "
-                                    "domains live for days), so the weekly update has not run or keeps failing "
-                                    f"(~/Library/Logs/browser-shield-update-lists.log). Run: {update}")
+                                    "domains live for days), so "
+                                    + ("the update at session start has not run yet or keeps failing" if PLUGIN
+                                       else "the weekly update has not run or keeps failing")
+                                    + f" ({UPDATE_LOG}). Run: {update}")
     return out
 
 

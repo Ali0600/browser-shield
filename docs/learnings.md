@@ -194,3 +194,17 @@ reported 3 moves, judged by the broken copy's cached policy.
 
 **Takeaway:** before loading a package from a path under a fixed alias, delete that alias and its submodules from
 `sys.modules`.
+
+### A Claude Code plugin is installed as a copy, so ship real files
+
+Installing a plugin copies its folder into Claude Code's cache; a link out of the folder is followed for a git
+marketplace, skipped for a local or `--plugin-dir` install, and dropped by the plugin directory. Anything the plugin
+writes belongs in `${CLAUDE_PLUGIN_DATA}`, since each update replaces the copy.
+
+**Why it came up:** the first layout for the public plugin linked the guard's code into `plugins/browser-shield/`;
+`claude plugin validate` said the directory would drop every link, and the docs said a local install skips them.
+The fix was a generated copy with a drift test, and a test that installs it the way Claude Code does (a copy, a
+separate data folder, the placeholders filled in) before trusting it.
+
+**Takeaway:** give a plugin real files built from the source by a script, fail the gate on drift, and test the
+installed shape, not the checkout.

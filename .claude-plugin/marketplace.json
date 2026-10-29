@@ -1,0 +1,30 @@
+{
+  "name": "claude-browser-shield",
+  "owner": {
+    "name": "Ali0600",
+    "url": "https://github.com/Ali0600"
+  },
+  "metadata": {
+    "description": "browser-shield, an ad blocker and safety guard for the browsers Claude drives"
+  },
+  "plugins": [
+    {
+      "name": "browser-shield",
+      "source": "./plugins/browser-shield",
+      "description": "Ad blocker and safety guard for Claude's own browsers: refuses ad, malware and phishing sites in the desktop app's Browser pane, Claude in Chrome and WebFetch, skips YouTube ads with an in-page script, and asks before downloads, payment pages and paste-into-Terminal lures. macOS. Unofficial.",
+      "category": "security",
+      "keywords": [
+        "ad-blocker",
+        "adblock",
+        "youtube-ads",
+        "browser",
+        "claude-in-chrome",
+        "security",
+        "phishing",
+        "malware",
+        "prompt-injection",
+        "hooks"
+      ]
+    }
+  ]
+}

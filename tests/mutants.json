@@ -1269,15 +1269,15 @@
  {
   "id": "policy-extension-message-relative",
   "file": "browser_shield/policy.py",
-  "old": "local = os.path.realpath(os.path.join(str(lists.lists_dir), \"extensions.local.txt\"))",
+  "old": "local = os.path.realpath(os.path.join(str(lists.local_dir), \"extensions.local.txt\"))",
   "new": "local = \"lists/extensions.local.txt\"",
   "expect": "test_the_ask_names_the_file_the_list_really_is"
  },
  {
   "id": "lists-extensions-strict",
   "file": "browser_shield/lists.py",
-  "old": "(lists_dir / \"extensions.local.txt\").read_text(encoding=\"utf-8\", errors=\"replace\")",
-  "new": "(lists_dir / \"extensions.local.txt\").read_text(encoding=\"utf-8\")",
+  "old": "(local_dir / \"extensions.local.txt\").read_text(encoding=\"utf-8\", errors=\"replace\")",
+  "new": "(local_dir / \"extensions.local.txt\").read_text(encoding=\"utf-8\")",
   "expect": "test_a_stray_byte_in_the_personal_list_breaks_nothing"
  },
  {
@@ -1335,5 +1335,96 @@
   "old": "        for name in [m for m in sys.modules if m == alias or m.startswith(alias + \".\") or m == f\"{alias}_guard\"]:\n            del sys.modules[name]\n",
   "new": "",
   "expect": "test_main_prints_rules_and_compare_finds_no_moves_against_itself"
+ },
+ {
+  "id": "lists-data-folder-ignored",
+  "file": "browser_shield/lists.py",
+  "old": "    return Path(data), Path(data) / \"local\"",
+  "new": "    return root / \"cache\", root / \"lists\"",
+  "expect": "test_the_copy_guards_and_keeps_its_state_in_the_data_folder"
+ },
+ {
+  "id": "lists-data-folder-relative-accepted",
+  "file": "browser_shield/lists.py",
+  "old": "    if not os.path.isabs(data):",
+  "new": "    if False:",
+  "expect": "test_without_a_data_folder_browser_calls_are_refused"
+ },
+ {
+  "id": "lists-local-from-curated",
+  "file": "browser_shield/lists.py",
+  "old": "            local_dir = LOCAL_DIR if lists_dir == LISTS_DIR else lists_dir",
+  "new": "            local_dir = lists_dir",
+  "expect": "test_the_copy_guards_and_keeps_its_state_in_the_data_folder"
+ },
+ {
+  "id": "guard-state-in-plugin-copy",
+  "file": "hooks/guard.py",
+  "old": "(DATA if PLUGIN else os.path.join(ROOT, \"cache\"))",
+  "new": "os.path.join(ROOT, \"cache\")",
+  "expect": "test_the_copy_guards_and_keeps_its_state_in_the_data_folder"
+ },
+ {
+  "id": "guard-update-command-without-data",
+  "file": "hooks/guard.py",
+  "old": "UPDATE = (f\"BROWSER_SHIELD_DATA={_quote(DATA)} \" if PLUGIN else \"\") \\",
+  "new": "UPDATE = \"\" \\",
+  "expect": "test_a_missing_index_is_reported_with_the_plugin_s_own_update"
+ },
+ {
+  "id": "update-lists-if-stale-always-runs",
+  "file": "scripts/update_lists.py",
+  "old": "    if \"--if-stale\" in argv and index.exists() and time.time() - index.stat().st_mtime < FRESH_FOR:",
+  "new": "    if False:",
+  "expect": "test_if_stale_runs_only_for_missing_or_week_old_lists"
+ },
+ {
+  "id": "update-lists-no-lock",
+  "file": "scripts/update_lists.py",
+  "old": "            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+  "new": "            pass",
+  "expect": "test_a_second_run_leaves_while_another_holds_the_lock"
+ },
+ {
+  "id": "plugin-hook-fails-open",
+  "file": "plugins/browser-shield/hooks/hooks.json",
+  "old": "\"onFailure\": \"block\"",
+  "new": "\"onFailure\": \"ignore\"",
+  "expect": "test_the_hooks_fail_closed_where_a_call_can_still_be_refused"
+ },
+ {
+  "id": "plugin-refresh-blocks-start",
+  "file": "plugins/browser-shield/hooks/hooks.json",
+  "old": "\"async\": true",
+  "new": "\"async\": false",
+  "expect": "test_the_hooks_fail_closed_where_a_call_can_still_be_refused"
+ },
+ {
+  "id": "build-copies-personal-lists",
+  "file": "scripts/build_plugin.py",
+  "old": "rel.endswith((\".pyc\", \".local.txt\"))",
+  "new": "rel.endswith(\".pyc\")",
+  "expect": "test_personal_lists_are_never_part_of_the_copy"
+ },
+ {
+  "id": "build-check-ignores-content",
+  "file": "scripts/build_plugin.py",
+  "old": "        elif copy.read_bytes() != (root / rel).read_bytes():",
+  "new": "        elif False:",
+  "expect": "test_the_drift_check_sees_each_kind_of_drift"
+ },
+ {
+  "id": "build-check-keeps-stale-copies",
+  "file": "scripts/build_plugin.py",
+  "old": "            problems.append(f\"{rel}: in the plugin but not a runtime file (left from an earlier build?)\")",
+  "new": "            pass",
+  "expect": "test_the_drift_check_sees_each_kind_of_drift"
+ },
+ {
+  "id": "build-check-accepts-links",
+  "file": "scripts/build_plugin.py",
+  "old": "            problems.append(f\"{rel}: a symbolic link in the plugin (the plugin directory drops links)\")",
+  "new": "            pass",
+  "expect": "test_the_drift_check_sees_each_kind_of_drift"
  }
 ]
