@@ -1,6 +1,6 @@
 {
   "name": "browser-shield",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ad blocker and safety guard for Claude's own browsers: refuses ad, malware and phishing sites in the desktop app's Browser pane, Claude in Chrome and WebFetch, skips YouTube ads and rejects cookie banners with an in-page script, and asks before downloads, payment pages and paste-into-Terminal lures. macOS. Unofficial.",
   "author": {
     "name": "Ali0600",
