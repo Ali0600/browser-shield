@@ -221,3 +221,16 @@ before vendoring it found this; the library build from the same package, started
 
 **Takeaway:** before vendoring a build, read the config it starts itself with and every entry point it leaves
 behind, and pin the values you rely on with tests, not with the reputation of the project.
+
+### Auto mode reviews what a hook rewrote, and gives up on a large enough rewrite
+
+When a PreToolUse hook returns `updatedInput`, auto mode's classifier judges the call as it will run, not as the model
+wrote it, and when it cannot review the rewritten input it refuses the call ("gave no verdict").
+
+**Why it came up:** with autoconsent spliced in, each `browserShield()` expands to about 650 KB. Calls carrying one
+expansion passed every time; a `browser_batch` carrying two (about 1.3 MB) was refused twice in a row, and the same
+batch split into one-shield calls went through. The guard now gives the engine to the first shield call in a batch
+only.
+
+**Takeaway:** keep a hook's rewrite of one call small, test the largest call your rewrite can produce in auto mode
+before shipping, and give the batch form its own limit.
