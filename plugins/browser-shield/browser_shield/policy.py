@@ -725,6 +725,9 @@ def rewrite(tool_name: str, tool_input: Any) -> Optional[dict]:
                 if js:
                     item = {**item, "input": {**item["input"], "text": js}}
                     changed = True
+                    # One engine per call: auto mode gave no verdict on a batch carrying two (measured 2026-10-30),
+                    # so later shield calls in the batch get the shield without it.
+                    consent = False
             actions.append(item)
         return {**tool_input, "actions": actions} if changed else None
     return None

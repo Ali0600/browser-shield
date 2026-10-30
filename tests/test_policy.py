@@ -554,6 +554,18 @@ class CookieBanners(unittest.TestCase):
                 {"name": "javascript_tool", "input": {"text": "browserShield()"}}]})
             self.assertEqual(out["actions"][0]["input"]["text"], policy.SHIELD_JS.read_text())
 
+    def test_a_batch_carries_the_engine_once(self):
+        # Auto mode refused a batch carrying two expansions ("gave no verdict", twice) and passed one carrying one
+        # (measured live 2026-10-30): the first shield call in a batch gets the engine, later ones the plain shield.
+        shield = {"name": "javascript_tool", "input": {"text": "browserShield()"}}
+        out = policy.rewrite(BATCH, {"actions": [
+            {"name": "navigate", "input": {"url": "https://a.example/"}}, shield, {"name": "javascript_tool", "input": {"text": "1"}},
+            {"name": "navigate", "input": {"url": "https://b.example/"}}, shield, shield]})
+        texts = [a["input"]["text"] for a in out["actions"] if a["name"] == "javascript_tool"]
+        self.assertEqual(texts, [policy.expand_shield("browserShield()"), "1",
+                                 policy.SHIELD_JS.read_text(), policy.SHIELD_JS.read_text()])
+        self.assertLess(len(json.dumps(out)), 900_000)
+
     def test_the_expansion_stays_well_under_a_megabyte_as_json(self):
         js = policy.expand_shield("browserShield()")
         self.assertLess(len(json.dumps({"text": js})), 900_000)

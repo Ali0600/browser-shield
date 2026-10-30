@@ -180,7 +180,9 @@ Then:
 - `off`: no cookie handling here (Claude in Chrome, a sub-frame, a local dev host, or after `off()`).
 
 What it stores is the site's own record of a refusal, in the pane's profile. Google's and YouTube's consent pages
-save by posting a form, so that page reloads without the shield: run it again there.
+save by posting a form, so that page reloads without the shield: run it again there. In one `browser_batch`, only
+the first `browserShield()` carries the cookie engine (auto mode could not review a call carrying two); the others
+skip ads and guard clicks as before, with `consent: off`.
 
 On a tab you opened yourself, ask in the chat: "run browserShield() on my YouTube tab". It keeps skipping ads as you
 go from video to video in that tab; a reload or a new tab needs another run. A paused ad stays paused: the shield
@@ -294,12 +296,14 @@ is the boundary.
   replays cut 40 false positives on real work to one and showed the new shell-opener rule moves none.
 - Built a WHATWG and UTS 46 URL host parser in Python, differential-tested against Node's parser on all 1.1 million
   Unicode code points; the sweep closed 251 characters that let a browser reach a host the guard misread.
-- Shipped an in-page YouTube ad skipper measured live on 3 videos: pre-rolls up to 135 s and ad pods of up to three
-  ads cleared in under 2 seconds each, with the viewer's sound restored.
+- Shipped an in-page YouTube ad skipper measured live on 3 videos (pre-rolls up to 135 s and pods of up to three
+  ads cleared in under 2 seconds each, sound restored), and cookie-banner rejection on a vendored engine read in
+  full before use (6 readers, 2 skeptics per concern, 5 of its rules switched off), verified on 9 consent managers by
+  reading each stored choice back as a refusal.
 - Ran three adversarial reviews (5 hunters; 4 lenses with 2 refuters per finding; 4 hunters with a skeptic each)
   and fixed, documented or refuted every finding, among them a forged-status path that let a page write into
-  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 204 Python, 63 Node and
-  10 plugin-engine tests and a mutation harness of 238 deliberate bugs, each required to turn a named test red.
+  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 205 Python, 63 Node and
+  10 plugin-engine tests and a mutation harness of 239 deliberate bugs, each required to turn a named test red.
 - Designed a secret-exfiltration guard: 14 vendor token patterns, a linear-time JWT scan, Luhn plus card-network
   checks with 47 published test cards allowed, and redaction of every log line and refusal message.
 - Shipped it two ways: as a Claude Code plugin from the repo's own marketplace (a generated copy of 19 runtime

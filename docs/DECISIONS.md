@@ -381,4 +381,15 @@ maintained engine over our own rules (option A).
   the Source Code Form (MPL §3.2) and `plugin.json` says `MIT AND MPL-2.0`.
 - **Size.** The expansion is about 650 KB. The transcript keeps the call as Claude wrote it (`browserShield()`,
   checked on this session's transcript), so Claude's context never carries it, and status reads use
-  `window.browserShield()`, which the hook leaves as it is.
+  `window.browserShield()`, which the hook leaves as it is. Measured live: auto mode passed every call carrying one
+  expansion and gave no verdict, twice, on a batch carrying two, so a batch carries the engine once
+  (`policy.rewrite`); later shield calls in it get the shield without the engine.
+- **Verified live in the Browser pane, 2026-10-30**, each stored choice read back as a refusal: OneTrust
+  (stackoverflow.com, groups `C0002-4:0`), Usercentrics (zwilling.com, 0 of 32 non-essential services on), Didomi
+  (allocine.fr), Quantcast (geogebra.org) and Google Funding Choices (bloodpressureok.com: TCF with 0 purposes, 0
+  vendors, 0 legitimate interests), CookieYes (cookieyes.com, necessary only), TrustArc (garmin.com, required only,
+  no preference window left open), Cookiebot (tfl.gov.uk, `declined`) and Google's consent page (`SOCS=CAE` after
+  the form post). A page with no banner settled at `none` within a minute; scripted clicks on "Accept all" and "Alle
+  akzeptieren" were cancelled and "Reject all" went through; on YouTube two ads were skipped with every built-in
+  still native. Not reached: consentmanager (dastelefonbuch.de answered with a Cloudflare bot check, left alone),
+  Borlabs and Complianz (their test sites no longer use them).

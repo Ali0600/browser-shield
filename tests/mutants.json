@@ -1664,5 +1664,12 @@
   "old": "        if not text.startswith(\"// browser-shield page script\") or \"/*@autoconsent-engine@*/\" in text \\\n                or \"var AutoConsent = class\" not in text:",
   "new": "        if False:",
   "expect": "test_smoke_refuses_a_copy_whose_page_script_lacks_the_cookie_engine"
+ },
+ {
+  "id": "policy-batch-engine-twice",
+  "file": "browser_shield/policy.py",
+  "old": "                    consent = False",
+  "new": "                    pass",
+  "expect": "test_a_batch_carries_the_engine_once"
  }
 ]
