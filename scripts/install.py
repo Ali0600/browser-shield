@@ -254,6 +254,16 @@ def smoke(release: Path, data: Path) -> list[str]:
         else:
             notes.append("no downloaded lists yet: the hooks check the curated lists only until the first update "
                          "(--schedule runs it weekly)")
+        # The page script with the cookie engine spliced in: a copy missing its vendored files is refused here, not
+        # at the first browserShield() a session runs.
+        out = run_hook(release, {**base, "tool_name": "mcp__Claude_Browser__javascript_tool",
+                                 "tool_input": {"action": "javascript_exec", "text": "browserShield()", "tabId": "t"}},
+                       Path(tmp))
+        text = out.get("hookSpecificOutput", {}).get("updatedInput", {}).get("text", "")
+        if not text.startswith("// browser-shield page script") or "/*@autoconsent-engine@*/" in text \
+                or "var AutoConsent = class" not in text:
+            raise InstallError(f"the copy's hook did not expand browserShield() with the cookie engine: "
+                               f"{json.dumps(out)[:300]}")
     return notes
 
 

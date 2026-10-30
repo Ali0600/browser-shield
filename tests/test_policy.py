@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -199,7 +200,9 @@ class TypingAndScripts(unittest.TestCase):
 
     def test_ordinary_scripts_pass(self):
         frame_js = (Path(__file__).resolve().parent / "fixtures" / "frame.js").read_text()
-        for text in ("document.title", "location.href = '/watch?v=x'", frame_js, policy.SHIELD_JS.read_text()):
+        # The page script as the pane gets it, autoconsent included: the autorun mod sends it through the guard.
+        shield = policy.expand_shield("browserShield()")
+        for text in ("document.title", "location.href = '/watch?v=x'", frame_js, shield):
             with self.subTest(text=text[:40]):
                 self.assertEqual(decide(JS, {"action": "javascript_exec", "text": text}).decision, policy.ALLOW)
 
@@ -492,7 +495,8 @@ class Batches(unittest.TestCase):
 
 class Rewrite(unittest.TestCase):
     def test_shield_call_expands_to_the_page_script(self):
-        script = policy.SHIELD_JS.read_text()
+        script = policy.expand_shield("browserShield()")
+        self.assertIn(policy.SHIELD_JS.read_text().splitlines()[0], script)
         for text in ("browserShield()", "  browserShield();\n"):
             with self.subTest(text=text):
                 out = policy.rewrite(JS, {"action": "javascript_exec", "text": text, "tabId": "t1"})
@@ -508,12 +512,85 @@ class Rewrite(unittest.TestCase):
                    {"name": "javascript_tool", "input": {"action": "javascript_exec", "text": "1+1"}}]
         out = policy.rewrite(BATCH, {"actions": actions})
         self.assertEqual(out["actions"][0], actions[0])
-        self.assertEqual(out["actions"][1]["input"]["text"], policy.SHIELD_JS.read_text())
+        self.assertEqual(out["actions"][1]["input"]["text"], policy.expand_shield("browserShield()"))
         self.assertEqual(out["actions"][2], actions[2])
         self.assertEqual(actions[1]["input"]["text"], "browserShield()", "the caller's input must not be mutated")
 
     def test_only_browser_tools_are_rewritten(self):
         self.assertIsNone(policy.rewrite("Bash", {"text": "browserShield()"}))
+
+
+class CookieBanners(unittest.TestCase):
+    """The expansion splices the vendored autoconsent into the page script's two slots, for the Browser pane only."""
+
+    ENGINE = (policy.AUTOCONSENT_DIR / "autoconsent.cjs.js").read_text(encoding="utf-8")
+    RULES = (policy.AUTOCONSENT_DIR / "compact-rules.json").read_text(encoding="utf-8")
+
+    def test_the_pane_gets_the_engine_and_its_rules_once_each_in_the_slots(self):
+        raw = policy.SHIELD_JS.read_text()
+        for slot in (policy.ENGINE_SLOT, policy.RULES_SLOT):
+            self.assertEqual(raw.count(slot), 1, slot)
+        js = policy.rewrite(JS, {"text": "browserShield()"})["text"]
+        self.assertEqual(js.count(self.ENGINE), 1)
+        self.assertEqual(js.count(self.RULES), 1)
+        self.assertNotIn(policy.ENGINE_SLOT, js)
+        self.assertNotIn(policy.RULES_SLOT, js)
+        self.assertIn("const AUTOCONSENT = function (module, exports, console) {\n" + self.ENGINE + "\n};", js)
+        self.assertIn("const CONSENT_RULES = " + self.RULES + ";", js)
+        self.assertEqual(js.splitlines()[0], raw.splitlines()[0], "PostToolUse knows the expansion by its first line")
+        self.assertTrue(policy.is_shield(js))
+
+    def test_the_engine_comes_after_the_local_host_gate(self):
+        js = policy.expand_shield("browserShield()")
+        gate = js.index("return { skipped: `local dev host")
+        self.assertLess(gate, js.index(self.ENGINE[:200]))
+        self.assertLess(gate, js.index(self.RULES[:200]))
+
+    def test_claude_in_chrome_gets_the_shield_without_the_engine(self):
+        for tool in ("mcp__claude-in-chrome__javascript_tool",):
+            js = policy.rewrite(tool, {"text": "browserShield()"})["text"]
+            self.assertEqual(js, policy.SHIELD_JS.read_text())
+            out = policy.rewrite("mcp__claude-in-chrome__browser_batch", {"actions": [
+                {"name": "javascript_tool", "input": {"text": "browserShield()"}}]})
+            self.assertEqual(out["actions"][0]["input"]["text"], policy.SHIELD_JS.read_text())
+
+    def test_the_expansion_stays_well_under_a_megabyte_as_json(self):
+        js = policy.expand_shield("browserShield()")
+        self.assertLess(len(json.dumps({"text": js})), 900_000)
+
+    def test_a_missing_vendor_file_raises_and_names_it(self):
+        from unittest import mock
+        empty = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty)
+        with mock.patch.object(policy, "AUTOCONSENT_DIR", empty):
+            with self.assertRaisesRegex(OSError, "autoconsent.cjs.js"):
+                policy.expand_shield("browserShield()")
+            self.assertEqual(policy.expand_shield("browserShield()", consent=False), policy.SHIELD_JS.read_text())
+
+    def test_a_page_script_without_both_slots_once_raises(self):
+        from unittest import mock
+        raw = policy.SHIELD_JS.read_text()
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        for name, text in (("no-engine", raw.replace(policy.ENGINE_SLOT, "null")),
+                           ("twice", raw.replace(policy.RULES_SLOT, policy.RULES_SLOT + "; " + policy.RULES_SLOT)),
+                           ("reversed", raw.replace(policy.ENGINE_SLOT, "@E@").replace(policy.RULES_SLOT, policy.ENGINE_SLOT)
+                            .replace("@E@", policy.RULES_SLOT))):
+            path = tmp / f"{name}.js"
+            path.write_text(text)
+            with self.subTest(name=name), mock.patch.object(policy, "SHIELD_JS", path):
+                with self.assertRaisesRegex(ValueError, "exactly once"):
+                    policy.expand_shield("browserShield()")
+
+    def test_a_missing_page_script_raises(self):
+        from unittest import mock
+        with mock.patch.object(policy, "SHIELD_JS", Path(tempfile.gettempdir()) / "no-such-shield.js"):
+            with self.assertRaises(OSError):
+                policy.expand_shield("browserShield()")
+
+    def test_the_rules_hold_no_line_separators_a_script_would_choke_on(self):
+        self.assertNotIn(" ", self.RULES)
+        self.assertNotIn(" ", self.RULES)
 
 
 class AfterTheCall(unittest.TestCase):

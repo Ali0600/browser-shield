@@ -208,3 +208,16 @@ separate data folder, the placeholders filled in) before trusting it.
 
 **Takeaway:** give a plugin real files built from the source by a script, fail the gate on drift, and test the
 installed shape, not the checkout.
+
+### A vendored tool's shipped defaults can contradict the reason you picked it
+
+A library is chosen for what it can do; the build you download decides what it does, through settings fixed inside
+it.
+
+**Why it came up:** DuckDuckGo's autoconsent was picked to reject cookie banners. Its single-file build, the obvious
+one to inject into a page, starts itself with `heuristicMode: 'tier2'`, documented as "will click the accept
+button" when that is the only button it recognises, and it also exposes a page-callable opt-in. Reading the build
+before vendoring it found this; the library build from the same package, started with our own config, does not.
+
+**Takeaway:** before vendoring a build, read the config it starts itself with and every entry point it leaves
+behind, and pin the values you rely on with tests, not with the reputation of the project.

@@ -1,0 +1,13 @@
+{
+  "package": "@duckduckgo/autoconsent",
+  "version": "17.1.0",
+  "tarball": "https://registry.npmjs.org/@duckduckgo/autoconsent/-/autoconsent-17.1.0.tgz",
+  "integrity": "sha512-qaXi19l4+cDImoXBuWgQiiQmQ00lxGRxhBQOEWnx9DDGcPO6A4/VK1mkAUrDkXCq4IIil/qFErssqvSxBpXVYQ==",
+  "gitHead": "e16022a73358c189b2d1bbe6f50778df251765c7",
+  "source": "https://github.com/duckduckgo/autoconsent/tree/v17.1.0",
+  "files": {
+    "LICENSE": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+    "autoconsent.cjs.js": "89db88253c3fe4b9c4b4755dcb0a9a522c35890ef98c6633fca4c150172f51af",
+    "compact-rules.json": "e622e8d5c9da4496b0d467ce68fd4358ce9d3a5b4cd273ed7226e975c146b5aa"
+  }
+}

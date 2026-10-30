@@ -1,13 +1,14 @@
 # claude-browser-shield
 
 An ad blocker and safety guard for the browsers Claude drives: the Claude desktop app's built-in Browser pane (its
-in-app browser), Claude in Chrome, and WebFetch. It skips YouTube ads, keeps Claude off ad, malware and phishing
-sites, and asks you first before a download, a payment page or a "paste this into Terminal" lure (`curl … | sh`).
+in-app browser), Claude in Chrome, and WebFetch. It skips YouTube ads, rejects cookie banners (it never accepts
+them), keeps Claude off ad, malware and phishing sites, and asks you first before a download, a payment page or a
+"paste this into Terminal" lure (`curl … | sh`).
 Unofficial: not made by or affiliated with Anthropic.
 
 **This is for you if:**
 
-- ads, pop-ups or YouTube pre-rolls get in the way when Claude browses for you;
+- ads, cookie banners, pop-ups or YouTube pre-rolls get in the way when Claude browses for you;
 - you looked for an ad blocker, or a way to add uBlock Origin, for Claude Code's Browser pane and found none (the
   pane cannot load extensions and has no ad-blocking setting; the request is open as
   [anthropics/claude-code#104030](https://github.com/anthropics/claude-code/issues/104030));
@@ -33,7 +34,10 @@ or [have Claude install it](#have-claude-install-it). It works from the two plac
   starts and stands down at YouTube's ad-blocker notice; on other sites it cancels clicks, navigations and form posts
   to ad-click, app-launch and download targets, refuses pop-ups nobody clicked for, answers dialogs, denies
   permission, clipboard and fullscreen requests, drops requests to ad networks, and hides ad slots (Fandom's
-  included). Claude calls it with the text `browserShield()`; the hook swaps in the file.
+  included). In the Browser pane it also rejects cookie banners with DuckDuckGo's
+  [autoconsent](https://github.com/duckduckgo/autoconsent) (vendored unmodified in `page/vendor/autoconsent/`): it
+  presses Reject, or unticks every purpose and saves, and never presses Accept; a script's click on an "Accept all"
+  button is cancelled. Claude calls it with the text `browserShield()`; the hook swaps in the file.
 - **An autorun mod** (`hooks/autorun.ts`, optional, off by default): a Claude Code plugin hook that starts the page
   script by itself after the pane or Chrome lands on YouTube, as a tool call of its own that the guard, your permission rules and auto
   mode judge like any other.
@@ -163,6 +167,21 @@ means YouTube is showing its ad-blocker notice: the shield stands down there, gi
 never hides the notice (the hook also refuses any script that would). Local dev hosts (`localhost`, `127.x`,
 `*.localhost`, `*.test`) are left alone so the app under test behaves as built.
 
+`consent` says what happened to the page's cookie banner. `looking` means the engine is still at work: read the
+status again a few seconds later with `javascript_tool text: window.browserShield()` (the hook leaves that text as
+it is, so the page script is not sent again; on a page with no banner the engine keeps watching for up to a minute).
+Then:
+
+- `none`: no banner, or one you answered before;
+- `rejected`: refused, with `cmp` naming the rule that did it and `clicks` how many clicks it took;
+- `hidden`: a banner that offers no refusal, hidden by a rule that knows it, with nothing stored;
+- `blocked`: the backstop cancelled a click on an "Accept all" button (`acceptsBlocked` counts them);
+- `failed`: the rule could not finish; the banner is still up;
+- `off`: no cookie handling here (Claude in Chrome, a sub-frame, a local dev host, or after `off()`).
+
+What it stores is the site's own record of a refusal, in the pane's profile. Google's and YouTube's consent pages
+save by posting a form, so that page reloads without the shield: run it again there.
+
 On a tab you opened yourself, ask in the chat: "run browserShield() on my YouTube tab". It keeps skipping ads as you
 go from video to video in that tab; a reload or a new tab needs another run. A paused ad stays paused: the shield
 moves it to its last tenth of a second, and it ends when the video plays again.
@@ -180,7 +199,8 @@ Claude ──tool call──▶ PreToolUse: hooks/guard.py ──deny / ask / re
                       │  browser_shield/leaks.py    API keys, private keys, cards, secret env values; redaction
                       └─ PostToolUse: blocked landing, missing page shield, text addressing AI agents
                          ▲ hooks/autorun.ts (mod, above the guard): YouTube landing → runs the page script
-page/shield.js ── runs inside the page: YouTube ad skipper, click / navigation / pop-up / dialog / permission guards
+page/shield.js ── runs inside the page: YouTube ad skipper, click / navigation / pop-up / dialog / permission guards,
+                  cookie banners (page/vendor/autoconsent, spliced in by the hook for the Browser pane)
 ```
 
 - **Where a URL really goes.** `urls.parse` follows the WHATWG URL Standard rather than `urllib.parse`: it strips
@@ -196,6 +216,18 @@ page/shield.js ── runs inside the page: YouTube ad skipper, click / navigati
   seeks a clip as long as the video or when the length is unknown, and under server-stitched ads (`SSAP, AD`) it
   uses the player's own `seekTo`, only where that is measured to be right (a pre-roll). On YouTube it replaces no
   built-in function and leaves YouTube's own requests alone (YouTube watches for both).
+- **Cookie banners.** The page script holds two empty slots; when the hook expands `browserShield()` for the
+  Browser pane it fills them with autoconsent's library build and its 1,327 rules (`policy.expand_shield`, about
+  650 KB, which never enters Claude's context: the transcript keeps the call as written). The engine runs in the top
+  frame only, with a console that prints nothing, and a config pinned by tests: opt out only, nothing hidden before
+  a decision (prehiding would make YouTube's dialog backdrop transparent), no guessing at banners no rule knows, no
+  rules generated by crawler, and five rules switched off after reading the engine (one hides pay-or-OK walls
+  without storing a choice, one goes back in history, one submits the Accept form, one ticks unticked purposes, one
+  clicks any button naming a purpose). Its published single-file build was not used: it presses Accept when that is
+  the only button it recognises. Independent of the engine, a script's click on a button labelled exactly "Accept
+  all" (38 labels in eight languages) is cancelled, and so is a script's click on a link off the page while the
+  engine works. The hook leaves Claude in Chrome without it: that is your own profile, and its messages are capped
+  at 1 MiB.
 - **Lists.** `lists/ad-hosts.txt` (curated; `page/shield.js` carries the same list and the same ad-click paths and
   link wrappers, pinned by tests) beats `lists/allow.txt`, which beats the downloaded lists: our own list keeps
   `adservice.google.com` blocked under an allowed `google.com`, and a downloaded false positive cannot cut Claude
@@ -224,7 +256,10 @@ Not covered: a click (`computer`) that navigates onto YouTube is followed by nei
 program that opens a browser from its own code (a script file, `node -e`) is not read, nor is an opener or URL held
 in a shell variable (`open "$URL"`); a lure whose words are split by quotes (`cu''rl … | sh`) is not asked about;
 secrets the agent builds at run time inside a script are invisible to a text check; a look-alike domain (Cyrillic `е`) is a different domain, caught only if a list names
-it; whether the Mac's hooks run for cloud sessions (`mcp__remote-devices__…`) is unknown. The page script runs in
+it; whether the Mac's hooks run for cloud sessions (`mcp__remote-devices__…`) is unknown. Cookie banners inside
+another site's frame (Sourcepoint's, which many news sites use, and TrustArc's preference window) are out of the
+page script's reach, walls that offer no free refusal ("accept or subscribe") are left as they are, and a banner no
+rule knows stays up. The page script runs in
 the page's own world after the page's code, so a hostile page can undo it: it stops accidents and ads, and the hook
 is the boundary.
 
@@ -238,6 +273,8 @@ is the boundary.
 | `hooks/autorun.ts`, `hooks/hooks.json`, `.claude-plugin/plugin.json` | The autorun mod and its plugin manifest |
 | `browser_shield/` | URL parsing (with `uts46.txt`), lists, leak patterns and redaction, the per-tool policy |
 | `page/shield.js` | The page script |
+| `page/vendor/autoconsent/` | DuckDuckGo's autoconsent 17.1.0, unmodified (MPL-2.0): the cookie engine, its rules, `SOURCE.json` |
+| `scripts/update_autoconsent.py` | Vendors an autoconsent version from npm, checked against its sha512 (`--check`: offline) |
 | `lists/` | Curated lists, `sources.json` for the downloads; `*.local.txt` for personal additions (git-ignored) |
 | `scripts/install.py` | Gates a commit in a copy and installs it for the hooks; loads the weekly list update |
 | `scripts/update_lists.py` | Downloads the threat lists and compiles `blocklist.sqlite` (`--if-stale`: only when a week old) |
@@ -261,11 +298,11 @@ is the boundary.
   ads cleared in under 2 seconds each, with the viewer's sound restored.
 - Ran three adversarial reviews (5 hunters; 4 lenses with 2 refuters per finding; 4 hunters with a skeptic each)
   and fixed, documented or refuted every finding, among them a forged-status path that let a page write into
-  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 181 Python, 47 Node and
-  10 plugin-engine tests and a mutation harness of 204 deliberate bugs, each required to turn a named test red.
+  Claude's context and a redirection that hid URLs from the shell rule; covered the code with 204 Python, 63 Node and
+  10 plugin-engine tests and a mutation harness of 238 deliberate bugs, each required to turn a named test red.
 - Designed a secret-exfiltration guard: 14 vendor token patterns, a linear-time JWT scan, Luhn plus card-network
   checks with 47 published test cards allowed, and redaction of every log line and refusal message.
-- Shipped it two ways: as a Claude Code plugin from the repo's own marketplace (a generated copy of 15 runtime
+- Shipped it two ways: as a Claude Code plugin from the repo's own marketplace (a generated copy of 19 runtime
   files behind a drift check, tested the way Claude Code installs it: a cache copy, a separate data folder,
   placeholders filled in), and on its own Mac like a service, each commit gated again inside a pinned release and
   swapped in by one atomic rename, with a launchd job refreshing 298,397 threat-list domains weekly; both fail
@@ -273,4 +310,6 @@ is the boundary.
 
 ## Licence
 
-MIT (`LICENSE`). `browser_shield/uts46.txt` is generated from Unicode data; its notice is in `NOTICE`.
+MIT (`LICENSE`). `page/vendor/autoconsent/` is DuckDuckGo's autoconsent, under the Mozilla Public License 2.0 (its
+`LICENSE` is beside it; `NOTICE` says where its source is). `browser_shield/uts46.txt` is generated from Unicode data;
+its notice is in `NOTICE`.

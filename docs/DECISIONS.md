@@ -2,6 +2,22 @@
 
 ## Backlog: alternatives worth trying later
 
+- **autoconsent's heuristic for banners no rule knows** (2026-10-30), `heuristicMode: 'reject'`: it would cover the
+  long tail, but reading it found it follows "Do not sell my info" links, answers age gates in other languages "no",
+  presses "Ablehnen" on pay-or-OK walls whose subscribe wording it misses, and reads Dutch "continue and accept" as a
+  refusal. Revisit hook: `heuristicMode` in `CONSENT_CONFIG` (`page/shield.js`) once upstream narrows those patterns;
+  the backstop already cancels a script's click on a link off the page while the engine works.
+- **autoconsent's generated rules** (2026-10-30): 446 of its 1,327 rules, one site each, made by a crawler and
+  clicking positional CSS paths, which a redesign turns into clicks on something else. Revisit hook:
+  `enableGeneratedRules` in `CONSENT_CONFIG`.
+- **Cookie banners in Claude in Chrome** (2026-10-30): left out because Chrome is the user's own profile and the
+  expansion (711 KB as JSON) is close to Chrome's 1 MiB native-messaging cap. Revisit hook: `consent = browser ==
+  "pane"` in `policy.rewrite`; measure the cap first.
+- **The autorun mod with the cookie engine** (2026-10-30): the mod reads the raw page script, so consent is off on
+  its path. Revisit hook: `hooks/autorun.ts:273`, or have the mod send `browserShield()` and let the guard expand it.
+- **A `verified` field from autoconsent's self-test** (2026-10-30): 994 rules carry read-only steps that check the
+  stored choice (`doSelfTest()`). Revisit hook: after `autoconsentDone` in `onConsentMessage` (`page/shield.js`).
+
 - **A permission rule that lets the pane's `javascript_tool` run unasked** (2026-10-26), the one way the autorun
   mod runs in auto mode, whose classifier refuses a call no request asked for (measured live). It would let every pane
   script run without auto mode's check (the guard still judges each one), far wider than the mod needs, so it is the
@@ -329,3 +345,40 @@ The public repo needed an install that does not ask for Node, the `claude` CLI a
   drop `version` from `plugins/browser-shield/.claude-plugin/plugin.json` once a CI run gates `main`.
 - **Not done:** an icon (`.claude-plugin/icon.png`), which the plugin directory wants and takes only once, on the
   first submission.
+
+## 2026-10-30: rejecting cookie banners with DuckDuckGo's autoconsent
+
+The owner asked for what the Consent-O-Matic extension does (the Browser pane loads no extension) and picked a
+maintained engine over our own rules (option A).
+
+- **Our own rules for the 20 or so most common banner makers**: rejected by the owner: far fewer sites, and they go
+  stale as sites change.
+- **Consent-O-Matic's rules** (MIT): rejected: last updated 2026-02, and its rule language would need an engine
+  ported to the page script.
+- **autoconsent** (MPL-2.0; DuckDuckGo's browsers use it): chosen. 17.1.0 is vendored by
+  `scripts/update_autoconsent.py` from the npm tarball, refused unless its sha512 matches the registry's integrity,
+  keeping three files byte for byte (the hashes also matched jsdelivr's listing).
+- **Its single-file build, `autoconsent.standalone.js`** (the one first named to the owner): rejected after reading
+  it. Its fixed config presses Accept when that is the only button its heuristic recognises (`heuristicMode:
+  'tier2'`), prehides YouTube's dialog backdrop on every page, leaves a page-callable opt-in
+  (`window.autoconsentReceiveMessage`) and logs to the console. **The library build with our own start-up**:
+  chosen: our config, no page globals, a console that prints nothing, the engine's methods wrapped on the instance.
+- **What the engine may do.** Six readers read all 3,998 lines and two skeptics checked each concern; all 12
+  concerns stood. Off: the heuristic, prehiding, the generated rules (backlog), and five rules: `sourcepoint-top`
+  (hides walls, pay-or-OK ones included, storing no choice), `povr` (`history.back()`), `ee-consent-notice` (submits
+  the Accept form after editing its fields), `Klaro` (its fallback toggles every purpose without reading it, then
+  saves) and `Admiral` (clicks any button on the page whose text names a purpose). Kept and noted: TikTok's
+  positional decline button, absolute xpaths that can click a same-labelled button outside the banner, re-clicks
+  while a button stays visible. The engine's focus restore runs only when nothing else took focus meanwhile.
+- **"Is this Accept?" for the backstop: our own list, or autoconsent's classifier.** Our own list: chosen, so the
+  check does not depend on the code it checks. Exact whole labels, "…all" phrases only (38, eight languages), so the
+  engine's own "Agree" or "OK" after unticking every box passes; the vendored rules' 34 exact click labels are a
+  passing test case. The classifier (`heuristics.cjs.js`): rejected, the same supplier as the clicks it would judge.
+- **Where it runs.** The top frame, in the Browser pane, after the shield is in place (a failure cannot leave the
+  shield half installed), YouTube included: it replaces no built-in function and hides nothing before a decision.
+  Claude in Chrome: left out (backlog). The autorun mod: left out (backlog).
+- **Licence.** The vendored files stay under the MPL-2.0 (file-level copyleft) inside an MIT repo; `NOTICE` names
+  the Source Code Form (MPL §3.2) and `plugin.json` says `MIT AND MPL-2.0`.
+- **Size.** The expansion is about 650 KB. The transcript keeps the call as Claude wrote it (`browserShield()`,
+  checked on this session's transcript), so Claude's context never carries it, and status reads use
+  `window.browserShield()`, which the hook leaves as it is.

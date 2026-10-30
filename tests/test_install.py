@@ -31,6 +31,8 @@ event = json.loads(sys.stdin.read())
 tool, url = event.get("tool_name"), (event.get("tool_input") or {}).get("url", "")
 if tool == "Bash":
     print("{}")
+elif tool.endswith("javascript_tool"):
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": {"text": EXPANSION}}}))
 elif "ads.example" in url:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"}}))
 elif MISSING:
@@ -40,11 +42,15 @@ else:
 """
 
 
-def fake_release(tmp: Path, guard: str = FAKE_GUARD, missing: bool = False) -> Path:
+SPLICED = "// browser-shield page script\nconst AUTOCONSENT = function (module, exports, console) {\nvar AutoConsent = class {}\n};"
+UNSPLICED = "// browser-shield page script\nconst AUTOCONSENT = /*@autoconsent-engine@*/ null;"
+
+
+def fake_release(tmp: Path, guard: str = FAKE_GUARD, missing: bool = False, expansion: str = SPLICED) -> Path:
     release = tmp / "release"
     (release / "hooks").mkdir(parents=True)
     (release / "lists").mkdir()
-    (release / "hooks" / "guard.py").write_text(f"MISSING = {missing}\n" + guard)
+    (release / "hooks" / "guard.py").write_text(f"MISSING = {missing}\nEXPANSION = {expansion!r}\n" + guard)
     (release / "lists" / "ad-hosts.txt").write_text("# curated\nads.example\n")
     return release
 
@@ -250,6 +256,18 @@ class Smoke(Temp):
         notes = install.smoke(fake_release(self.tmp, missing=True), self.tmp / "data")
         self.assertTrue(any("no downloaded lists" in n for n in notes), notes)
 
+    def test_smoke_refuses_a_copy_whose_page_script_lacks_the_cookie_engine(self):
+        # Each case trips exactly one of the three conditions, and the last none of the page script at all.
+        no_engine = "// browser-shield page script\nconst AUTOCONSENT = null;"
+        slot_left = SPLICED + "\nconst CONSENT_RULES = /*@autoconsent-engine@*/ null;"
+        no_header = SPLICED.split("\n", 1)[1]
+        for expansion in (no_engine, slot_left, no_header, UNSPLICED, ""):
+            with self.subTest(expansion=expansion[:40]):
+                shutil.rmtree(self.tmp / "release", ignore_errors=True)
+                release = fake_release(self.tmp, missing=True, expansion=expansion)
+                with self.assertRaisesRegex(install.InstallError, "did not expand browserShield\\(\\) with the cookie engine"):
+                    install.smoke(release, self.tmp / "data")
+
 
 class Settings(Temp):
     def test_hook_commands_and_runs_installed(self):
@@ -327,7 +345,7 @@ class EndToEnd(Temp):
     def setUp(self):
         super().setUp()
         # MISSING: the new data/ folder holds no index, so a copy that reads it must say the lists are missing.
-        self.repo = make_repo(self.tmp, {"hooks/guard.py": "MISSING = True\n" + FAKE_GUARD,
+        self.repo = make_repo(self.tmp, {"hooks/guard.py": f"MISSING = True\nEXPANSION = {SPLICED!r}\n" + FAKE_GUARD,
                                          "lists/ad-hosts.txt": "ads.example\n", "scripts/x.py": "X = 1\n"})
         self.root = self.tmp / "install"
         settings = mock.patch.object(install, "SETTINGS", self.tmp / "settings.json")

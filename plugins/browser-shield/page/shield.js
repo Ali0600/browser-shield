@@ -14,7 +14,7 @@
 // It is not a security boundary: it runs in the page's own world, after the page's code (the guard hook is the
 // boundary); it stops accidents and ads, and a hostile page can undo it.
 (() => {
-  const VERSION = 3;
+  const VERSION = 4;
   const w = window;
   const prior = w.__browserShield;
   if (prior) {
@@ -30,6 +30,12 @@
   if (/^(localhost|127(\.\d{1,3}){3}|\[::1\])$|\.(localhost|test)$/.test(host) && !w.__browserShieldOnLocal) {
     return { skipped: `local dev host ${host}: the page under test is left alone` };
   }
+
+  // Cookie banners: DuckDuckGo's autoconsent (page/vendor/autoconsent/, MPL-2.0, unmodified). The guard hook fills
+  // these two slots when it expands browserShield() for the Browser pane; left empty (this file as it is: the unit
+  // tests, the autorun mod, Claude in Chrome), consent handling is off.
+  const AUTOCONSENT = /*@autoconsent-engine@*/ null;
+  const CONSENT_RULES = /*@autoconsent-rules@*/ null;
 
   // Ad networks and ad-click redirectors. lists/ad-hosts.txt holds the same list for the guard hook (a test pins it).
   const AD_HOSTS = [
@@ -60,8 +66,10 @@
   const state = {
     version: VERSION, host, youtube: isYouTube, enabled: true, enforcement: false, enforcementSign: '',
     adsSkipped: 0, clicksBlocked: 0, navigationsBlocked: 0, popupsBlocked: 0, requestsBlocked: 0,
-    dialogsAnswered: 0, permissionsDenied: 0, log: [],
+    dialogsAnswered: 0, permissionsDenied: 0, acceptsBlocked: 0, log: [],
   };
+  // The cookie engine's progress (below): looking, then none, rejected, hidden, blocked or failed; off without it.
+  const consent = { state: 'off', cmp: undefined, lifecycle: undefined, clicks: 0, rules: 0, errors: 0, blockedDuringRun: false };
   const note = (kind, detail) => {
     state.log.push(`${kind}: ${String(detail).slice(0, 140)}`);
     if (state.log.length > 30) state.log.shift();
@@ -106,10 +114,14 @@
     state[counter]++;
     note(kind, why);
   };
+  // The nodes an event passed through, innermost first and through open shadow roots; [] when there is no path.
+  const pathOf = (e) => {
+    try { return (e && e.composedPath && e.composedPath()) || []; } catch { return []; }
+  };
   // The link an event came from, through shadow roots, with SVG <a> elements read by their attribute.
   const linkOf = (e) => {
-    const path = e.composedPath ? e.composedPath() : [];
-    const nodes = path.length ? path : [e.target];
+    const path = pathOf(e);
+    const nodes = path.length ? path : [e && e.target];
     for (const n of nodes) {
       const tag = n && n.localName;
       if (tag === 'a' || tag === 'area') {
@@ -118,12 +130,63 @@
         if (href) return { href, download: Boolean(n.hasAttribute && n.hasAttribute('download')) };
       }
     }
-    const a = e.target && e.target.closest && e.target.closest('a[href], area[href]');
-    return a ? { href: a.href, download: a.hasAttribute('download') } : null;
+    try {
+      const a = e.target && e.target.closest && e.target.closest('a[href], area[href]');
+      return a ? { href: a.href, download: a.hasAttribute('download') } : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // ---- the never-accept backstop: no script presses "accept all" on a cookie banner ----------------------------
+  // Whole labels, exactly: the cookie engine's own opt-outs press "Agree", "OK" or "Accept" after unticking every box,
+  // and "Do not accept" or "Accept necessary" are refusals. tests/shield.test.js holds its own copy of this list.
+  const ACCEPT_ALL = new Set([
+    'accept all', 'accept all cookies', 'accept all and continue', 'allow all', 'allow all cookies', 'agree to all',
+    'alle akzeptieren', 'alle cookies akzeptieren', 'alles akzeptieren', 'alle zulassen', 'alle cookies zulassen',
+    'alle annehmen', 'allen zustimmen', 'alle erlauben',
+    'tout accepter', 'accepter tout', 'tout autoriser', 'accepter tous les cookies',
+    'aceptar todo', 'aceptar todas', 'aceptar todas las cookies', 'permitir todas',
+    'accetta tutto', 'accetta tutti', 'accetta tutti i cookie', 'consenti tutti',
+    'alles accepteren', 'alle cookies accepteren', 'alles toestaan', 'alle cookies toestaan',
+    'aceitar tudo', 'aceitar todos', 'aceitar todos os cookies', 'permitir todos',
+    'zaakceptuj wszystkie', 'akceptuj wszystkie', 'zaakceptuj wszystko', 'zezwól na wszystkie',
+  ]);
+  const BUTTONISH = 'button, a, [role=button], input[type=submit], input[type=button]';
+  const labelOf = (node) => {
+    try {
+      const el = (node && node.closest && node.closest(BUTTONISH)) || node;
+      const text = el && (el.innerText || el.textContent || el.value || (el.getAttribute && el.getAttribute('aria-label')));
+      return String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+  // A script's click (never the user's) on an accept-all button is cancelled, the shield on or off; so is a script's
+  // click on a link off the page while the cookie engine is at work (its heuristic can meet "Do not sell" links).
+  const backstop = (e) => {
+    if (!e || e.isTrusted) return false;
+    const path = pathOf(e);
+    const label = labelOf(path.length ? path[0] : e.target);
+    if (ACCEPT_ALL.has(label)) {
+      if (consent.state === 'looking') consent.blockedDuringRun = true;
+      cancel(e, 'acceptsBlocked', 'accept blocked', `"${label}"`);
+      return true;
+    }
+    if (consent.state !== 'looking') return false;
+    const link = linkOf(e);
+    const u = link && toURL(link.href);
+    if (u && (u.protocol === 'http:' || u.protocol === 'https:')
+        && (u.origin !== location.origin || u.pathname !== new URL(location.href).pathname)) {
+      cancel(e, 'clicksBlocked', 'click blocked', `the cookie engine would have left the page for ${u.origin}`);
+      return true;
+    }
+    return false;
   };
 
   // ---- clicks and form posts to ad, app-launch and download targets (listeners, not patches: safe on YouTube) ----
   const onClick = (e) => {
+    if (backstop(e)) return;
     if (!state.enabled) return;
     const link = linkOf(e);
     if (!link) return;
@@ -399,18 +462,136 @@
       stalled: stats.buffer_health_seconds === '0.00 s' && stats.resolution === '0x0',
     };
   };
+  // ---- cookie banners: reject, never accept ----------------------------------------------------------------------
+  // The engine runs in the top frame only, once per page, with a module object of its own and a console that prints
+  // nothing. Its config, each value from reading the engine (docs/DECISIONS.md, 2026-10-30): opt out only; no
+  // heuristic for banners no rule knows (it follows "Do not sell" links, answers foreign age gates "no", and in
+  // 'tier2' presses Accept); nothing hidden before a decision (prehiding makes YouTube's dialog backdrop transparent);
+  // no generated rules (they click by position); and five rules off: sourcepoint-top (hides walls, pay-or-OK ones
+  // included, storing no choice), povr (goes back in history), ee-consent-notice (submits the Accept form), Klaro (its
+  // fallback ticks unticked purposes) and Admiral (clicks any button whose text names a purpose). Pinned by
+  // tests/shield.test.js.
+  const CONSENT_CONFIG = {
+    enabled: true, autoAction: 'optOut', heuristicMode: 'off', enableHeuristicDetection: false,
+    enablePrehide: false, enableCosmeticRules: true, enableGeneratedRules: false, isMainWorld: true,
+    disabledCmps: ['sourcepoint-top', 'povr', 'ee-consent-notice', 'Klaro', 'Admiral'], detectRetries: 20,
+    logs: { lifecycle: false, rulesteps: false, detectionsteps: false, evals: false, errors: true, messages: false, waits: false },
+  };
+  let engine = null;
+  const ruleName = (v) => (v == null ? undefined : String(v).slice(0, 60));
+  // Only a run still looking settles, so the first outcome stands (off() and a failure to start are final).
+  const settle = (to) => {
+    if (consent.state !== 'looking') return;
+    consent.state = to;
+    note('consent', `${to}${consent.cmp ? ` (${consent.cmp})` : ''}`);
+  };
+  // Messages from the engine. Its constructor sends the first ones before it returns, so this never touches `engine`;
+  // what it keeps is the engine's own vocabulary (rule names, lifecycle words), never text from the page.
+  const onConsentMessage = (msg) => {
+    if (!msg || typeof msg !== 'object') return Promise.resolve();
+    if (msg.type === 'report' && msg.state) {
+      consent.lifecycle = ruleName(msg.state.lifecycle);
+      if (msg.state.lifecycle === 'nothingDetected') settle('none');
+    } else if (msg.type === 'cmpDetected' || msg.type === 'popupFound') {
+      consent.cmp = ruleName(msg.cmp);
+    } else if (msg.type === 'optOutResult' && !msg.result) {
+      settle('failed');
+    } else if (msg.type === 'autoconsentDone') {
+      consent.cmp = ruleName(msg.cmp);
+      consent.clicks = Number(msg.totalClicks) || 0;
+      settle(consent.blockedDuringRun ? 'blocked' : msg.isCosmetic ? 'hidden' : 'rejected');
+    } else if (msg.type === 'autoconsentError') {
+      consent.errors++;
+    }
+    return Promise.resolve();
+  };
+  const startConsent = () => {
+    if (!AUTOCONSENT || !CONSENT_RULES || w.top !== w) return;
+    consent.state = 'looking';
+    const mod = { exports: {} };
+    const quiet = new Proxy({}, { get: (_, name) => (name === 'error' || name === 'warn' ? () => { consent.errors++; } : () => {}) });
+    AUTOCONSENT(mod, mod.exports, quiet);
+    const compact = mod.exports.filterCompactRules(CONSENT_RULES, { url: location.href, mainFrame: true });
+    engine = new mod.exports.default(onConsentMessage);
+    const start = engine._start;
+    const optOut = engine.doOptOut;
+    const restore = engine.restoreFocus;
+    if (typeof start !== 'function' || typeof optOut !== 'function' || typeof restore !== 'function') {
+      throw new TypeError('this engine lacks a method the shield wraps (_start, doOptOut, restoreFocus)');
+    }
+    // Detection ends with a banner maker found but no banner up: the visitor chose before.
+    engine._start = async function (...args) {
+      try {
+        return await start.apply(this, args);
+      } catch (err) {
+        consent.errors++;
+        settle('failed');
+        return false;
+      } finally {
+        if (consent.lifecycle === 'cmpDetected' || consent.lifecycle === 'nothingDetected') settle('none');
+      }
+    };
+    // An opt-out that throws, or stops at an intermediate step, is a failure (and never an unhandled rejection).
+    engine.doOptOut = async function (...args) {
+      try {
+        return await optOut.apply(this, args);
+      } catch (err) {
+        consent.errors++;
+        return false;
+      } finally {
+        settle('failed');
+      }
+    };
+    // Focus goes back to where it was only if nothing else took it meanwhile (Claude may be typing elsewhere).
+    engine.restoreFocus = function (...args) {
+      const active = document.activeElement;
+      if (active && active !== document.body) {
+        this.focusedElement = undefined;
+        return undefined;
+      }
+      return restore.apply(this, args);
+    };
+    const builtIn = engine.rules.length;
+    engine.initialize(CONSENT_CONFIG, { compact });
+    consent.rules = engine.rules.length;
+    if (consent.rules <= builtIn) {
+      engine.config.autoAction = null;
+      settle('failed');
+      note('consent', 'the cookie rules did not load');
+    }
+  };
+  // The engine has no stop: with no action left to take it only watches, and its hiding rules go.
+  const stopConsent = () => {
+    if (!engine) return;
+    try { engine.config.autoAction = null; } catch { /* never initialized: nothing to silence */ }
+    const css = document.getElementById && document.getElementById('autoconsent-css-rules');
+    if (css) css.remove();
+    consent.state = 'off';
+  };
+
   const status = () => Object.assign({
     version: state.version, host: state.host, youtube: state.youtube, enabled: state.enabled,
     enforcement: state.enforcement, enforcementSign: state.enforcementSign || undefined, adsSkipped: state.adsSkipped,
     clicksBlocked: state.clicksBlocked, navigationsBlocked: state.navigationsBlocked, popupsBlocked: state.popupsBlocked,
     requestsBlocked: state.requestsBlocked, dialogsAnswered: state.dialogsAnswered, permissionsDenied: state.permissionsDenied,
+    consent: {
+      state: consent.state, cmp: consent.cmp, lifecycle: consent.lifecycle, clicks: consent.clicks, rules: consent.rules,
+      acceptsBlocked: state.acceptsBlocked, errors: consent.errors,
+    },
   }, isYouTube ? youtubeStatus() : {}, prior ? { upgradedFrom: prior.status().version } : {}, { log: state.log.slice(-10) });
   w.__browserShield = {
     status,
-    off() { standDown(); state.enabled = false; style.remove(); return status(); },
+    off() { standDown(); stopConsent(); state.enabled = false; style.remove(); return status(); },
     on() { state.enabled = true; (document.head || document.documentElement).appendChild(style); return status(); },
   };
   w.browserShield = status;
+  // After the shield is in place, so a consent failure can never leave it half installed.
+  try {
+    startConsent();
+  } catch (err) {
+    consent.state = 'failed';
+    note('consent', `the engine did not start (${err && err.name})`);
+  }
   note('active', location.href);
   return status();
 })()

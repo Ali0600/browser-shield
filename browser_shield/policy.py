@@ -17,6 +17,11 @@ from .lists import ROOT, Lists
 
 SHIELD_JS = ROOT / "page" / "shield.js"
 SHIELD_CALL = "browserShield()"  # javascript_tool text the guard swaps for the page script
+# DuckDuckGo's autoconsent (MPL-2.0), vendored byte for byte by scripts/update_autoconsent.py. The expansion fills the
+# page script's two slots with it, in this order, so the shield also rejects cookie banners.
+AUTOCONSENT_DIR = ROOT / "page" / "vendor" / "autoconsent"
+ENGINE_SLOT = "/*@autoconsent-engine@*/ null"
+RULES_SLOT = "/*@autoconsent-rules@*/ null"
 
 DENY, ASK, ALLOW = "deny", "ask", "allow"
 _RANK = {ALLOW: 0, ASK: 1, DENY: 2}
@@ -604,11 +609,26 @@ def is_shield(text: Any) -> bool:
     )
 
 
-def expand_shield(text: Any) -> Optional[str]:
-    """The page script, when the agent's javascript_tool text is exactly the shield call; else None."""
-    if isinstance(text, str) and text.strip().rstrip(";") == SHIELD_CALL and SHIELD_JS.exists():
-        return SHIELD_JS.read_text(encoding="utf-8")
-    return None
+def expand_shield(text: Any, consent: bool = True) -> Optional[str]:
+    """The page script, when the agent's javascript_tool text is exactly the shield call; else None.
+
+    With `consent`, the script's two slots are filled with the vendored autoconsent engine and its rules; without, they
+    stay empty and the page script leaves cookie banners alone. A missing file or slot raises: the guard then refuses
+    the call and names it, rather than run a shield that silently lost a part.
+    """
+    if not (isinstance(text, str) and text.strip().rstrip(";") == SHIELD_CALL):
+        return None
+    script = SHIELD_JS.read_text(encoding="utf-8")
+    head, engine_slot, rest = script.partition(ENGINE_SLOT)
+    middle, rules_slot, tail = rest.partition(RULES_SLOT)
+    if not engine_slot or not rules_slot or ENGINE_SLOT in rest or RULES_SLOT in tail:
+        raise ValueError(f"{SHIELD_JS.name} must hold {ENGINE_SLOT} and then {RULES_SLOT}, each exactly once")
+    if not consent:
+        return script
+    engine = (AUTOCONSENT_DIR / "autoconsent.cjs.js").read_text(encoding="utf-8")
+    rules = (AUTOCONSENT_DIR / "compact-rules.json").read_text(encoding="utf-8")
+    # Plain parameters only: the engine starts with "use strict", which forbids it in a function with default values.
+    return head + "function (module, exports, console) {\n" + engine + "\n}" + middle + rules + tail
 
 
 def evaluate(tool_name: str, tool_input: Any, lists: Optional[Lists] = None, ctx: Context = NO_CONTEXT) -> Verdict:
@@ -690,15 +710,18 @@ def rewrite(tool_name: str, tool_input: Any) -> Optional[dict]:
     browser, tool = short_name(tool_name)
     if browser not in ("pane", "chrome") or not isinstance(tool_input, dict):
         return None
+    # Cookie banners only in the Browser pane: Claude in Chrome is the user's own profile, and its messages are capped
+    # at 1 MiB, which the engine and its rules would come close to.
+    consent = browser == "pane"
     if tool == "javascript_tool":
-        js = expand_shield(tool_input.get("text"))
+        js = expand_shield(tool_input.get("text"), consent)
         return {**tool_input, "text": js} if js else None
     if tool == "browser_batch" and isinstance(tool_input.get("actions"), list):
         changed = False
         actions = []
         for item in tool_input["actions"]:
             if isinstance(item, dict) and item.get("name") == "javascript_tool" and isinstance(item.get("input"), dict):
-                js = expand_shield(item["input"].get("text"))
+                js = expand_shield(item["input"].get("text"), consent)
                 if js:
                     item = {**item, "input": {**item["input"], "text": js}}
                     changed = True

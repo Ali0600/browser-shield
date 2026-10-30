@@ -107,6 +107,26 @@ class Hook(unittest.TestCase):
         self.assertEqual(spec["permissionDecision"], "deny")
         self.assertIn("RuntimeError: boom", spec["permissionDecisionReason"])
 
+    def test_a_missing_vendor_file_refuses_the_shield_call_and_says_to_reinstall(self):
+        import sys
+        from unittest import mock
+
+        sys.path.insert(0, str(ROOT / "hooks"))
+        import guard
+        from browser_shield import policy
+
+        empty = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty)
+        with mock.patch.object(policy, "AUTOCONSENT_DIR", empty), \
+                mock.patch.object(guard, "STATE_DIR", str(STATE)), mock.patch.object(guard, "LOG", str(STATE / "guard.log")):
+            out = guard.pre_tool_use(pre("mcp__Claude_Browser__javascript_tool",
+                                         {"action": "javascript_exec", "text": "browserShield()", "tabId": "t1"}))
+        spec = out["hookSpecificOutput"]
+        self.assertEqual(spec["permissionDecision"], "deny")
+        self.assertIn("autoconsent.cjs.js", spec["permissionDecisionReason"])
+        self.assertIn("reinstall it", spec["permissionDecisionReason"])
+        self.assertNotIn("updatedInput", spec)
+
     def test_messages_name_the_copy_as_installed(self):
         # The installed hook runs through ~/.local/share/browser-shield/current, a symlink to one release: commands it
         # quotes must name that link (right after the next install), while its code still loads from the release.

@@ -86,6 +86,17 @@ those (the same list as above), rebuild the copy in the same commit; the gate's 
 - **`page/shield.js` must leave local dev hosts alone, replace no built-in function on YouTube, and never hide or
   dismiss YouTube's enforcement notice.** Bump `VERSION` when its behaviour changes (an older copy on a page stands
   down for a newer one).
+- **Cookie banners are rejected, never accepted.** `CONSENT_CONFIG` in `page/shield.js` (`autoAction: 'optOut'`,
+  `heuristicMode: 'off'`, `enablePrehide: false`, `enableGeneratedRules: false`, five `disabledCmps`) is pinned by
+  `tests/shield.test.js` and by mutants; loosening any value needs the owner's go and a reason in docs/DECISIONS.md.
+  `ACCEPT_ALL` (the backstop's labels) is in the page script and in the test, pinned to each other. The two slots
+  (`/*@autoconsent-engine@*/ null`, then `/*@autoconsent-rules@*/ null`) stay after the local-host gate, each once;
+  `policy.expand_shield` fills them, for the Browser pane only (`policy.rewrite`), and refuses a script without them.
+- **`page/vendor/autoconsent/` is vendored, never edited** (MPL-2.0, byte for byte from npm; `SOURCE.json` holds each
+  file's sha256 and a test compares). Update only with `/usr/bin/python3 -I scripts/update_autoconsent.py VERSION`
+  after the owner's go (a download), then read the new engine before it ships, as on 2026-10-30 (docs/DECISIONS.md),
+  update `NOTICE`, and run the gate and the full mutation check: the page script wraps three of its methods
+  (`_start`, `doOptOut`, `restoreFocus`) and a test requires every `disabledCmps` name to still exist.
 - **The repo root is also a Claude Code plugin, `browser-shield-autorun`** (`.claude-plugin/plugin.json`,
   `hooks/hooks.json` naming the mod `hooks/autorun.ts`), loaded only with `--plugin-dir` and not in the marketplace
   (the user left it off, 2026-10-26). The mod is TypeScript with erasable syntax only (Node strips its types for the unit tests: no
@@ -94,6 +105,7 @@ those (the same list as above), rebuild the copy in the same commit; the gate's 
 - **No downloaded list is committed**: `cache/` is git-ignored; `scripts/update_lists.py` fetches only the https
   URLs in `lists/sources.json`. The weekly LaunchAgent runs it from the installed copy (the user's go, 2026-10-27),
   and the plugin's session-start hook runs it on installers' machines (`--if-stale`: a week old or missing); any
-  other run here, or a new source, still needs the user's go-ahead (each fetch is a download).
+  other run here, or a new source, still needs the user's go-ahead (each fetch is a download). The one downloaded
+  thing committed is `page/vendor/autoconsent/` (code, read before it went in; rule above).
 - Verifying a page-script change for real: open a monetized YouTube video in the Browser pane, run `browserShield()`,
   and read `adsSkipped`, the log and the video's `currentTime` and `muted` (README "Use").

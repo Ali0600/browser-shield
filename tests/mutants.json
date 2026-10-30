@@ -681,8 +681,8 @@
  {
   "id": "ps-shadow-blind",
   "file": "page/shield.js",
-  "old": "    const path = e.composedPath ? e.composedPath() : [];",
-  "new": "    const path = [];",
+  "old": "    try { return (e && e.composedPath && e.composedPath()) || []; } catch { return []; }",
+  "new": "    return [];",
   "expect": "PS-13"
  },
  {
@@ -1426,5 +1426,243 @@
   "old": "            problems.append(f\"{rel}: a symbolic link in the plugin (the plugin directory drops links)\")",
   "new": "            pass",
   "expect": "test_the_drift_check_sees_each_kind_of_drift"
+ },
+ {
+  "id": "consent-heuristic-accepts",
+  "file": "page/shield.js",
+  "old": "heuristicMode: 'off'",
+  "new": "heuristicMode: 'tier2'",
+  "expect": "with a config that never accepts"
+ },
+ {
+  "id": "consent-klaro-on",
+  "file": "page/shield.js",
+  "old": "'ee-consent-notice', 'Klaro', 'Admiral'",
+  "new": "'ee-consent-notice', 'Admiral'",
+  "expect": "with a config that never accepts"
+ },
+ {
+  "id": "consent-prehides",
+  "file": "page/shield.js",
+  "old": "enablePrehide: false",
+  "new": "enablePrehide: true",
+  "expect": "with a config that never accepts"
+ },
+ {
+  "id": "consent-opts-in",
+  "file": "page/shield.js",
+  "old": "autoAction: 'optOut'",
+  "new": "autoAction: 'optIn'",
+  "expect": "with a config that never accepts"
+ },
+ {
+  "id": "consent-hides-walls",
+  "file": "page/shield.js",
+  "old": "disabledCmps: ['sourcepoint-top', 'povr',",
+  "new": "disabledCmps: ['povr',",
+  "expect": "with a config that never accepts"
+ },
+ {
+  "id": "consent-generated-rules",
+  "file": "page/shield.js",
+  "old": "enableGeneratedRules: false",
+  "new": "enableGeneratedRules: true",
+  "expect": "with a config that never accepts"
+ },
+ {
+  "id": "consent-in-sub-frames",
+  "file": "page/shield.js",
+  "old": "if (!AUTOCONSENT || !CONSENT_RULES || w.top !== w) return;",
+  "new": "if (!AUTOCONSENT || !CONSENT_RULES) return;",
+  "expect": "never in a sub-frame"
+ },
+ {
+  "id": "consent-loud-console",
+  "file": "page/shield.js",
+  "old": "    AUTOCONSENT(mod, mod.exports, quiet);",
+  "new": "    AUTOCONSENT(mod, mod.exports, console);",
+  "expect": "prints nothing"
+ },
+ {
+  "id": "consent-page-text",
+  "file": "page/shield.js",
+  "old": "const ruleName = (v) => (v == null ? undefined : String(v).slice(0, 60));",
+  "new": "const ruleName = (v) => (v == null ? undefined : String(v));",
+  "expect": "the status says what happened"
+ },
+ {
+  "id": "consent-no-none-after-detection",
+  "file": "page/shield.js",
+  "old": "if (consent.lifecycle === 'cmpDetected' || consent.lifecycle === 'nothingDetected') settle('none');",
+  "new": "",
+  "expect": "the status says what happened"
+ },
+ {
+  "id": "consent-intermediate-passes",
+  "file": "page/shield.js",
+  "old": "      } finally {\n        settle('failed');\n      }",
+  "new": "      } finally {\n      }",
+  "expect": "the status says what happened"
+ },
+ {
+  "id": "consent-blocked-reads-rejected",
+  "file": "page/shield.js",
+  "old": "settle(consent.blockedDuringRun ? 'blocked' : msg.isCosmetic ? 'hidden' : 'rejected');",
+  "new": "settle(msg.isCosmetic ? 'hidden' : 'rejected');",
+  "expect": "reported as blocked"
+ },
+ {
+  "id": "consent-rules-unchecked",
+  "file": "page/shield.js",
+  "old": "if (consent.rules <= builtIn) {",
+  "new": "if (false) {",
+  "expect": "rules that did not load"
+ },
+ {
+  "id": "consent-steals-focus",
+  "file": "page/shield.js",
+  "old": "if (active && active !== document.body) {",
+  "new": "if (false) {",
+  "expect": "focus goes back"
+ },
+ {
+  "id": "consent-off-keeps-acting",
+  "file": "page/shield.js",
+  "old": "    try { engine.config.autoAction = null; } catch",
+  "new": "    try { } catch",
+  "expect": "off() silences"
+ },
+ {
+  "id": "consent-failure-escapes",
+  "file": "page/shield.js",
+  "old": "  } catch (err) {\n    consent.state = 'failed';",
+  "new": "  } catch (err) {\n    throw err;",
+  "expect": "leaves the shield installed"
+ },
+ {
+  "id": "backstop-trusts-scripts",
+  "file": "page/shield.js",
+  "old": "if (!e || e.isTrusted) return false;",
+  "new": "if (!e) return false;",
+  "expect": "real clicks pass"
+ },
+ {
+  "id": "backstop-after-off",
+  "file": "page/shield.js",
+  "old": "    if (backstop(e)) return;\n    if (!state.enabled) return;",
+  "new": "    if (!state.enabled) return;\n    if (backstop(e)) return;",
+  "expect": "holds after off()"
+ },
+ {
+  "id": "backstop-drops-an-entry",
+  "file": "page/shield.js",
+  "old": "'alle zulassen', ",
+  "new": "",
+  "expect": "holds exactly the accept-all labels"
+ },
+ {
+  "id": "backstop-matches-words",
+  "file": "page/shield.js",
+  "old": "if (ACCEPT_ALL.has(label)) {",
+  "new": "if ([...ACCEPT_ALL].some((a) => label.includes(a.split(' ')[0]))) {",
+  "expect": "single-word buttons"
+ },
+ {
+  "id": "backstop-no-link-guard",
+  "file": "page/shield.js",
+  "old": "if (consent.state !== 'looking') return false;",
+  "new": "return false;",
+  "expect": "click its way off the page"
+ },
+ {
+  "id": "policy-chrome-gets-the-engine",
+  "file": "browser_shield/policy.py",
+  "old": "    consent = browser == \"pane\"",
+  "new": "    consent = True",
+  "expect": "test_claude_in_chrome_gets_the_shield_without_the_engine"
+ },
+ {
+  "id": "policy-slot-twice-passes",
+  "file": "browser_shield/policy.py",
+  "old": "    if not engine_slot or not rules_slot or ENGINE_SLOT in rest or RULES_SLOT in tail:",
+  "new": "    if not engine_slot or not rules_slot:",
+  "expect": "test_a_page_script_without_both_slots_once_raises"
+ },
+ {
+  "id": "policy-no-engine-spliced",
+  "file": "browser_shield/policy.py",
+  "old": "    return head + \"function (module, exports, console) {\\n\" + engine + \"\\n}\" + middle + rules + tail",
+  "new": "    return script",
+  "expect": "test_the_pane_gets_the_engine_and_its_rules_once_each_in_the_slots"
+ },
+ {
+  "id": "policy-missing-shield-silent",
+  "file": "browser_shield/policy.py",
+  "old": "    script = SHIELD_JS.read_text(encoding=\"utf-8\")",
+  "new": "    if not SHIELD_JS.exists():\n        return None\n    script = SHIELD_JS.read_text(encoding=\"utf-8\")",
+  "expect": "test_a_missing_page_script_raises"
+ },
+ {
+  "id": "guard-missing-file-blames-code",
+  "file": "hooks/guard.py",
+  "old": "if isinstance(exc, OSError) else",
+  "new": "if False else",
+  "expect": "test_a_missing_vendor_file_refuses_the_shield_call_and_says_to_reinstall"
+ },
+ {
+  "id": "ua-skips-integrity",
+  "file": "scripts/update_autoconsent.py",
+  "old": "    check_integrity(tarball, dist.get(\"integrity\", \"\"))",
+  "new": "    pass",
+  "expect": "test_a_tarball_whose_sha512_differs_from_the_registry_is_refused"
+ },
+ {
+  "id": "ua-follows-links",
+  "file": "scripts/update_autoconsent.py",
+  "old": "            if not info.isreg():",
+  "new": "            if False:",
+  "expect": "test_a_link_under_a_wanted_name_is_refused"
+ },
+ {
+  "id": "ua-takes-duplicates",
+  "file": "scripts/update_autoconsent.py",
+  "old": "            if name in found:",
+  "new": "            if False:",
+  "expect": "test_a_wanted_name_twice_is_refused"
+ },
+ {
+  "id": "ua-any-tarball-url",
+  "file": "scripts/update_autoconsent.py",
+  "old": "    if meta.get(\"version\") != version or not tarball_url.startswith(REGISTRY + \"/-/\"):",
+  "new": "    if meta.get(\"version\") != version:",
+  "expect": "test_a_tarball_url_off_the_registry_is_refused"
+ },
+ {
+  "id": "ua-check-ignores-bytes",
+  "file": "scripts/update_autoconsent.py",
+  "old": "        elif sha256(path.read_bytes()) != recorded.get(name):",
+  "new": "        elif False:",
+  "expect": "test_an_edited_byte_is_drift"
+ },
+ {
+  "id": "ua-any-version",
+  "file": "scripts/update_autoconsent.py",
+  "old": "    if not re.fullmatch(r\"\\d+\\.\\d+\\.\\d+\", version):",
+  "new": "    if False:",
+  "expect": "test_only_an_exact_version_is_fetched"
+ },
+ {
+  "id": "ua-sha1-accepted",
+  "file": "scripts/update_autoconsent.py",
+  "old": "    if algo != \"sha512\" or not digest:",
+  "new": "    if not digest:",
+  "expect": "test_only_sha512_integrity_is_accepted"
+ },
+ {
+  "id": "install-smoke-skips-consent",
+  "file": "scripts/install.py",
+  "old": "        if not text.startswith(\"// browser-shield page script\") or \"/*@autoconsent-engine@*/\" in text \\\n                or \"var AutoConsent = class\" not in text:",
+  "new": "        if False:",
+  "expect": "test_smoke_refuses_a_copy_whose_page_script_lacks_the_cookie_engine"
  }
 ]

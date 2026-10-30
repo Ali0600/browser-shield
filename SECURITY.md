@@ -6,6 +6,10 @@ claude-browser-shield guards the calls an AI agent (Claude Code) makes to the br
   cannot judge a call it refuses it, and with `"onFailure": "block"` a hook that fails to run refuses it too.
 - **The page script is best effort.** `page/shield.js` runs inside the page after the page's own code, so a hostile
   page can undo it. It skips ads and stops accidental clicks; it is not a defence against a page.
+- **It carries third-party code that clicks.** In the Browser pane the page script also runs DuckDuckGo's autoconsent
+  (`page/vendor/autoconsent/`, pinned and unmodified) to reject cookie banners. A click that accepts consent, or any
+  other way it acts against its "never accept" config, counts as a bypass here. A wrong rule for one site's banner
+  is an upstream bug: report it to [duckduckgo/autoconsent](https://github.com/duckduckgo/autoconsent/issues).
 - **What it does not cover** is listed in the README ("Not covered"): for example a program that opens a browser by
   itself, a URL held in a shell variable, or secrets assembled at run time inside a script.
 

@@ -115,8 +115,10 @@ def pre_tool_use(event: dict) -> dict:
         # crashes the parser walk past the guard.
         what = f"{type(exc).__name__}: {safe_text(str(exc))[:200]}"
         log({"event": "PreToolUse", "tool": tool, "decision": "deny", "reasons": [f"guard error {what}"]})
-        return deny(f"browser-shield: the guard failed on this call ({what}) and refuses it; "
-                    f"the guard's code needs a fix ({os.path.join(HERE, 'hooks', 'guard.py')})")
+        fix = ("a file it needs is missing or unreadable, so this copy of browser-shield is incomplete; reinstall it"
+               if isinstance(exc, OSError) else
+               f"the guard's code needs a fix ({os.path.join(HERE, 'hooks', 'guard.py')})")
+        return deny(f"browser-shield: the guard failed on this call ({what}) and refuses it; {fix}")
     out: dict = {}
     if verdict.decision != policy.ALLOW:
         log({"event": "PreToolUse", "tool": tool, "decision": verdict.decision, "reasons": reasons})
